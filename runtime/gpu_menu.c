@@ -238,7 +238,11 @@ static void build(void) {
     PadInfo *pad = pad_slot >= 0 && pads[pad_slot].connected ? &pads[pad_slot] : NULL;
     switch (page) {
     case P_DISPLAY:
+#ifdef __APPLE__
+        r = add(R_WINDOW, K_CHOICE, W_NOW, "Window", "Windowed: a normal window. Borderless and full screen: macOS's full screen, in a space of its own. Option+Return switches too.");
+#else
         r = add(R_WINDOW, K_CHOICE, W_NOW, "Window", "Windowed: a normal window. Borderless: covering the monitor. Full screen: borderless and always on top. F11 switches too.");
+#endif
         snprintf(r->value, sizeof r->value, "%s", ds.mode == DISPLAY_BORDERLESS ? "borderless" : ds.mode == DISPLAY_FULLSCREEN ? "full screen" : "windowed");
         note_env(r, "SSBU_WINDOW");
         r = add(R_PACING, K_CHOICE, W_NOW, "Frame pacing",
@@ -252,14 +256,20 @@ static void build(void) {
         r = add(R_OVERLAY, K_CHOICE, W_NOW, "Frame rate in the corner", "The frame rate and a graph of frame times (F1 shows or hides it while playing; F2 adds details).");
         snprintf(r->value, sizeof r->value, "%s", on_off(overlay_on ? *overlay_on : ds.overlay));
         note_env(r, "SSBU_OVERLAY");
+#ifdef __APPLE__
+        r = add(R_SIZE, K_CHOICE, W_RESTART, "Window size", "The size of the game's window when it is not full screen, in points (on a Retina display, a point is 2 x 2 pixels).");
+#else
         r = add(R_SIZE, K_CHOICE, W_RESTART, "Window size", "The size of the game's window when it is not full screen (at 100% Windows scaling).");
+#endif
         snprintf(r->value, sizeof r->value, "%d x %d", ds.width, ds.height);
         note_env(r, "SSBU_WINDOW_SIZE");
+#ifndef __APPLE__   /* (the Metal renderer draws at the game's own 1920x1080) */
         r = add(R_SCALE, K_CHOICE, W_RESTART, "Render scale",
                 "How many times 1920x1080 the game draws at: sharper on a big screen, more work for the graphics card. Auto: as many pixels as the window has.");
         if (ds.render_scale <= 0) snprintf(r->value, sizeof r->value, "auto");
         else snprintf(r->value, sizeof r->value, "%g", ds.render_scale);
         note_env(r, "SSBU_RENDER_SCALE");
+#endif
 #ifdef _WIN32
         r = add(R_GPU, K_CHOICE, W_RESTART, "Graphics card", "Auto picks the fastest card (on a laptop, the NVIDIA or AMD one). Pick another to use it instead.");
         snprintf(r->value, sizeof r->value, "%s", ds.gpu);
@@ -353,8 +363,14 @@ static void build(void) {
     case P_GAME:
         add(R_RESTART, K_ACTION, W_NONE, "Restart the game", "Starts the game again (for the settings marked 'next start'). A match in progress is lost.");
         add(R_QUIT, K_ACTION, W_NONE, "Quit the game", "Closes the game. A match in progress is lost.");
+#ifdef __APPLE__
+        static const char *const KEYS[][2] = {{"Esc / Home button", "this menu (or hold - and + for a second)"}, {"F1, Cmd+1", "frame rate on / off"},
+                                               {"F2, Cmd+2", "details"}, {"F3, Cmd+3", "screenshot (screenshots folder)"},
+                                               {"Option+Return", "full screen (or Ctrl+Cmd+F)"}};
+#else
         static const char *const KEYS[][2] = {{"Esc / Home button", "this menu (or hold - and + for a second)"}, {"F1", "frame rate on / off"},
                                                {"F2", "details"}, {"F3", "screenshot (screenshots folder)"}, {"F11, Alt+Enter", "full screen"}};
+#endif
         for (u32 i = 0; i < sizeof KEYS / sizeof *KEYS; i++) {
             r = add(R_NONE, K_INFO, W_NONE, KEYS[i][0], "Keys that work while playing.");
             snprintf(r->value, sizeof r->value, "%s", KEYS[i][1]);
@@ -558,7 +574,11 @@ static void action(const Row *row) {
         if (CreateProcessA(NULL, cmd, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) { CloseHandle(pi.hThread); CloseHandle(pi.hProcess); }
 #else
         char cmd[MAX_PATH + 64];
+#ifdef __APPLE__
+        snprintf(cmd, sizeof cmd, "open -t '%s' >/dev/null 2>&1 &", pad_ini_path());   /* (the default text editor) */
+#else
         snprintf(cmd, sizeof cmd, "xdg-open '%s' >/dev/null 2>&1 &", pad_ini_path());
+#endif
         if (system(cmd)) {}
 #endif
         menu_toast("controllers.ini opened in another window (changes there count at the next start)");

@@ -1,5 +1,5 @@
 /* The debug overlay's glyph atlas for the macOS build: what make_overlay_font.c draws with GDI on
- * Windows (Consolas, bold, 20 pixels, white on black), drawn here with Core Text from Menlo Bold
+ * Windows (Consolas, bold, 40 pixels, white on black), drawn here with Core Text from Menlo Bold
  * (the same design as the DejaVu Sans Mono Bold the Linux build draws with), into the same C
  * header (overlay_font.h, a build product - tools/mac/build_mac.py makes it).
  *
@@ -12,12 +12,12 @@
 #include <stdio.h>
 #include <string.h>
 
-#define CELL_W 12
-#define CELL_H 24
+#define CELL_W 24
+#define CELL_H 48
 #define COLS 16
 #define ATLAS_W (CELL_W * COLS)
 #define ATLAS_H (CELL_H * 6)
-#define SIZE 20   /* (CreateFontW(-20): a 20-pixel em) */
+#define SIZE 40   /* (CreateFontW(-40): a 40-pixel em) */
 
 /* The named font, only if that is what Core Text found (it stands in another for a name it does not know). */
 static CTFontRef font_named(NSString *name) {
@@ -60,14 +60,14 @@ int main(int argc, char **argv) {
         CGContextSetGrayFillColor(dc, 1, 1);
         CGContextSetShouldAntialias(dc, true);
         CGContextSetShouldSmoothFonts(dc, false);   /* plain coverage, as GDI's ANTIALIASED_QUALITY */
-        /* Each glyph with the top of its line at (x, y + 1) of its cell, as GDI's TextOut puts it:
+        /* Each glyph with the top of its line at (x, y + 2) of its cell, as GDI's TextOut puts it:
          * the baseline is the font's ascent below that. (User space is y up from the bottom.) */
         CGFloat ascent = CTFontGetAscent(font);
         for (int c = 32; c < 127; c++) {
             UniChar ch = (UniChar)c;
             CGGlyph glyph;
             if (!CTFontGetGlyphsForCharacters(font, &ch, &glyph, 1)) continue;
-            CGFloat x = (c - 32) % COLS * CELL_W, top = (c - 32) / COLS * CELL_H + 1;
+            CGFloat x = (c - 32) % COLS * CELL_W, top = (c - 32) / COLS * CELL_H + 2;
             CGPoint at = CGPointMake(x, ATLAS_H - top - ascent);
             CTFontDrawGlyphs(font, &glyph, &at, 1, dc);
         }

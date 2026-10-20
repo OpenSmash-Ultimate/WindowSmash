@@ -213,7 +213,3 @@ int rt_thread_frames(unsigned port, void **frames, int max, uint64_t *pc, uint64
     pthread_mutex_unlock(&stop_lock);
     return n;
 }
-
-/* The settings menu (gpu_menu.c, drawn with the Direct3D overlay) is not in the macOS program yet:
- * the game always has its input. */
-int menu_blocks_input(void) { return 0; }

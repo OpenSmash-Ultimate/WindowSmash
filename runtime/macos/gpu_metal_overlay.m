@@ -1,18 +1,24 @@
 /* The debug overlay for the Metal renderer: frame rate, a graph of recent frame times and the
- * renderer's statistics, drawn in the corner of each presented frame - gpu_overlay.c's, drawn
- * with Metal.
+ * renderer's statistics, drawn in the corner of each presented frame; and, while it is open, the
+ * settings menu (gpu_menu.c), with the same quads - gpu_overlay.c's, drawn with Metal.
  *
  * Text comes from the glyph atlas the build draws (overlay_font.h: a monospaced font, printable
- * ASCII, plus a solid cell for rectangles); everything is quads, fetched by the vertex shader
- * from a buffer of the frame's own (one of three: no more frames are with the GPU at once). */
+ * ASCII, plus a solid cell for rectangles), at twice the overlay's own text size so the menu's
+ * larger text stays sharp; everything is quads, fetched by the vertex shader from a buffer of
+ * the frame's own (one of three: no more frames are with the GPU at once). */
 #define _CRT_SECURE_NO_WARNINGS
 #include "gpu_metal.h"
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 
-#define CELL_W 12
-#define CELL_H 24
+#include "gpu_menu.h"
+#include "gpu_overlay.h"
+
+#define CELL_W 24                 /* the atlas's cells */
+#define CELL_H 48
+#define TEXT_W 12                 /* the overlay's own letters: half size */
+#define TEXT_H 24
 #define COLS 16
 #define ATLAS_W (CELL_W * COLS)
 #define ATLAS_H (CELL_H * 6)      /* ' '..'~', then the solid cell (127) */
@@ -47,9 +53,10 @@ static const char MSL[] =
 #include "overlay_font.h"
 static int make_atlas(id<MTLDevice> dev) {
     static unsigned char coverage[ATLAS_W * ATLAS_H];
+    _Static_assert(sizeof overlay_font == sizeof coverage, "overlay_font.h is not the atlas's size: build it again (tools/mac/build_mac.py)");
     memcpy(coverage, overlay_font, sizeof coverage);
-    int solid = 127 - 32;
-    for (int y = 0; y < CELL_H; y++) memset(coverage + (solid / COLS * CELL_H + y) * ATLAS_W + solid % COLS * CELL_W, 255, CELL_W);
+    int solid = 127 - 32;   /* (filled away from its edges: scaled-down text samples next to its cell, and 'o' is above) */
+    for (int y = 4; y < CELL_H - 4; y++) memset(coverage + (solid / COLS * CELL_H + y) * ATLAS_W + solid % COLS * CELL_W + 4, 255, CELL_W - 8);
     MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatR8Unorm width:ATLAS_W height:ATLAS_H mipmapped:NO];
     td.storageMode = MTLStorageModeShared;
     td.usage = MTLTextureUsageShaderRead;
@@ -107,22 +114,27 @@ static void quad(float x, float y, float w, float h, int cell, unsigned color) {
 }
 static void rect(float x, float y, float w, float h, unsigned color) { quad(x, y, w, h, 127 - 32, color); }
 
-#define RGBA(r, g, b, a) ((unsigned)(r) | (unsigned)(g) << 8 | (unsigned)(b) << 16 | (unsigned)(a) << 24)
+#define RGBA OVL_RGBA
 
-/* Text at (x, y), one line per '\n'; returns the y below it. */
-static float text(float x, float y, unsigned color, const char *s) {
-    float cx = x;
+/* Text at (x, y), letters size high, one line per '\n'; returns the y below it. */
+static float text_sized(float x, float y, float size, unsigned color, const char *s) {
+    float cx = x, w = size / 2, shadow = size >= 32 ? 2.0f : 1.0f;
     for (; *s; s++) {
-        if (*s == '\n') { cx = x; y += CELL_H; continue; }
+        if (*s == '\n') { cx = x; y += size; continue; }
         int c = (unsigned char)*s;
         if (c > 32 && c < 127) {
-            quad(cx + 1, y + 1, CELL_W, CELL_H, c - 32, RGBA(0, 0, 0, 200));   /* shadow */
-            quad(cx, y, CELL_W, CELL_H, c - 32, color);
+            quad(cx + shadow, y + shadow, w, size, c - 32, RGBA(0, 0, 0, 200));   /* shadow */
+            quad(cx, y, w, size, c - 32, color);
         }
-        cx += CELL_W;
+        cx += w;
     }
-    return y + CELL_H;
+    return y + size;
 }
+
+static float text(float x, float y, unsigned color, const char *s) { return text_sized(x, y, TEXT_H, color, s); }
+
+void ovl_rect(float x, float y, float w, float h, unsigned color) { rect(x, y, w, h, color); }
+float ovl_text(float x, float y, float size, unsigned color, const char *s) { return text_sized(x, y, size, color, s); }
 
 static int lines_of(const char *s, int *widest) {
     int n = 1, w = 0, cur = 0;
@@ -132,6 +144,7 @@ static int lines_of(const char *s, int *widest) {
 }
 
 /* ---- the frame ---------------------------------------------------------------------- */
+static void hud(const char *detail);
 static double history[HISTORY];   /* milliseconds per frame, newest at [head - 1] */
 static unsigned head, filled;
 
@@ -147,12 +160,34 @@ void overlay_present_metal(id<MTLDevice> dev, id<MTLRenderCommandEncoder> enc, M
         if (filled < HISTORY) filled++;
     }
     last = now;
-    if (!show) return;
+    int menu = menu_visible();
+    if (!show && !menu) return;
     if (!state) state = init(dev) ? 1 : -1;
     if (state < 0) return;
     id<MTLRenderPipelineState> pso = pipeline(dev, format);
     if (!pso) return;
+    nverts = 0;
+    if (show && !menu_blocks_input()) hud(detail);   /* (an open menu instead of the overlay) */
+    if (menu) menu_draw((float)w, (float)h);
+    if (!nverts) return;
 
+    /* draw it all */
+    id<MTLBuffer> vbuf = vbufs[frame++ % FRAMES];
+    memcpy(vbuf.contents, verts, nverts * sizeof *verts);
+    float inv[2] = {1.0f / (float)w, 1.0f / (float)h};
+    [enc setRenderPipelineState:pso];
+    [enc setDepthStencilState:no_depth];
+    [enc setCullMode:MTLCullModeNone];
+    [enc setViewport:(MTLViewport){x0, y0, w, h, 0, 1}];
+    [enc setVertexBuffer:vbuf offset:0 atIndex:0];
+    [enc setVertexBytes:inv length:sizeof inv atIndex:1];
+    [enc setFragmentTexture:atlas atIndex:0];
+    [enc setFragmentSamplerState:sampler atIndex:0];
+    [enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:nverts];
+}
+
+/* The overlay: the last second's frame rate and a graph of the last 240 frames' times. */
+static void hud(const char *detail) {
     /* the last second: frames, slowest and fastest */
     double total = 0, worst = 0, best = 1e9;
     unsigned frames = 0;
@@ -163,12 +198,11 @@ void overlay_present_metal(id<MTLDevice> dev, id<MTLRenderCommandEncoder> enc, M
         if (ms < best) best = ms;
     }
     double fps = total > 0 ? frames * 1000.0 / total : 0, last_ms = filled ? history[(head + HISTORY - 1) % HISTORY] : 0;
-    nverts = 0;
     char line[256];
     float x = 16, y = 16, gw = 2.0f * HISTORY, gh = 100;   /* graph: 2 px a frame; 100 px = 50 ms */
     int detail_w = 0, detail_lines = detail ? lines_of(detail, &detail_w) : 0;
-    float panel_w = gw + 16, panel_h = 2 * CELL_H + 8 + gh + 12 + detail_lines * CELL_H;
-    if (detail_w * CELL_W + 16 > panel_w) panel_w = (float)(detail_w * CELL_W + 16);
+    float panel_w = gw + 16, panel_h = 2 * TEXT_H + 8 + gh + 12 + detail_lines * TEXT_H;
+    if (detail_w * TEXT_W + 16 > panel_w) panel_w = (float)(detail_w * TEXT_W + 16);
     rect(x - 8, y - 6, panel_w, panel_h, RGBA(0, 0, 0, 150));
     unsigned fps_color = fps >= 57 ? RGBA(120, 255, 120, 255) : fps >= 45 ? RGBA(255, 230, 90, 255) : RGBA(255, 100, 90, 255);
     snprintf(line, sizeof line, "%5.1f FPS  %5.1f ms", fps, last_ms);
@@ -189,18 +223,4 @@ void overlay_present_metal(id<MTLDevice> dev, id<MTLRenderCommandEncoder> enc, M
     rect(x, y + gh - 33.33f * scale, gw, 1, RGBA(255, 255, 255, 70));
     y += gh + 6;
     if (detail) text(x, y, RGBA(210, 225, 255, 255), detail);
-
-    /* draw it all */
-    id<MTLBuffer> vbuf = vbufs[frame++ % FRAMES];
-    memcpy(vbuf.contents, verts, nverts * sizeof *verts);
-    float inv[2] = {1.0f / (float)w, 1.0f / (float)h};
-    [enc setRenderPipelineState:pso];
-    [enc setDepthStencilState:no_depth];
-    [enc setCullMode:MTLCullModeNone];
-    [enc setViewport:(MTLViewport){x0, y0, w, h, 0, 1}];
-    [enc setVertexBuffer:vbuf offset:0 atIndex:0];
-    [enc setVertexBytes:inv length:sizeof inv atIndex:1];
-    [enc setFragmentTexture:atlas atIndex:0];
-    [enc setFragmentSamplerState:sampler atIndex:0];
-    [enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:nverts];
 }

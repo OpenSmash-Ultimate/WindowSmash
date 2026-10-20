@@ -11,16 +11,29 @@
 #ifndef _WIN32
 #include <unistd.h>
 #endif
+#ifdef __APPLE__
+#include <signal.h>
+#include <spawn.h>
+extern char **environ;
+const char *rt_exe_path(void);   /* (macos/platform.c: the program, from _NSGetExecutablePath) */
+#endif
 
 #include "host.h"
 #include "settings.h"
 
 static SRWLOCK lock = SRWLOCK_INIT;
 static int online_files;
+#ifdef __APPLE__
+static char **start_argv;   /* (settings_restart: macOS has no /proc/self/cmdline) */
+#endif
 
 void settings_args(int argc, char **argv) {
     for (int i = 1; i < argc; i++)
         if (!strcmp(argv[i], "--online")) online_files = 1;
+#ifdef __APPLE__
+    start_argv = calloc((size_t)argc + 1, sizeof *start_argv);
+    for (int i = 0; start_argv && i < argc; i++) start_argv[i] = _strdup(argv[i]);
+#endif
 }
 
 int settings_online(void) { return online_files; }
@@ -294,6 +307,33 @@ void settings_restart(void) {
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);
     ExitProcess(0);
+}
+#elif defined __APPLE__
+/* The program in place of this one (the same process, so the launcher's `open -W` keeps waiting
+ * for it), with the arguments it started with. The log stays stdout and stderr (without SSBU_LOG,
+ * which would start it again empty); every other file and socket is closed. */
+void settings_restart(void) {
+    if (online_files)
+        for (u32 i = 0; i < sizeof NET_VARS / sizeof *NET_VARS; i++) unsetenv(NET_VARS[i]);
+    const char *exe = rt_exe_path();
+    if (!start_argv || !start_argv[0] || !exe[0]) { fprintf(stderr, "[settings] could not start the game again (no command line)\n"); return; }
+    unsetenv("SSBU_LOG");
+    posix_spawnattr_t attr;
+    posix_spawn_file_actions_t files;
+    sigset_t none;
+    sigemptyset(&none);
+    posix_spawnattr_init(&attr);
+    posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETEXEC | POSIX_SPAWN_CLOEXEC_DEFAULT | POSIX_SPAWN_SETSIGMASK);
+    posix_spawnattr_setsigmask(&attr, &none);   /* (this thread's blocked signals would be the new main thread's) */
+    posix_spawn_file_actions_init(&files);
+    for (int fd = 0; fd < 3; fd++) posix_spawn_file_actions_addinherit_np(&files, fd);
+    fprintf(stderr, "[settings] starting the game again\n");
+    fflush(stderr);
+    fflush(stdout);
+    int err = posix_spawn(NULL, exe, &files, &attr, start_argv, environ);   /* (returns only when it failed) */
+    posix_spawn_file_actions_destroy(&files);
+    posix_spawnattr_destroy(&attr);
+    fprintf(stderr, "[settings] could not start the game again (error %d)\n", err);
 }
 #else
 void settings_restart(void) {

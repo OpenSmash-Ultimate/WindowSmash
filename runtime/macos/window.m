@@ -2,7 +2,8 @@
  *
  * As on Linux (linux/window.c), the main thread makes the window at start-up and then runs its
  * events for good, keeping what the rest of the runtime asks for up to date: the keyboard
- * (behind GetAsyncKeyState), focus, the debug keys and the window's close button (and Cmd+Q).
+ * (behind GetAsyncKeyState), focus, the debug keys, the settings menu's keys and typed letters
+ * (gpu_menu.c) and the window's close button (and Cmd+Q).
  * The renderer draws into the window's CAMetalLayer, made here (rt_metal_layer): BGRA8 in sRGB,
  * at the window's size in pixels - 2 x 2 a point on a Retina display - which this file keeps up
  * to date as the window changes size or display, and reports (display_note_size).
@@ -34,6 +35,7 @@
 #include <time.h>
 
 #include "../display.h"
+#include "../gpu_menu.h"
 
 /* (the Win32 shim's, runtime/linux/include/windows.h, whose BOOL is not Objective-C's) */
 __attribute__((noreturn)) void ExitProcess(unsigned code);
@@ -53,7 +55,7 @@ static const bool *keys;
 static int nkeys;
 static int full;                    /* full screen, or on the way there */
 static int menu_full_screen;        /* Ctrl+Cmd+F is a menu's (SDL's Window menu): see key_down */
-static int hide_cursor, cursor_hidden;
+static int cursor_hidden;
 static Uint64 mouse_moved_at;
 static id activity;                 /* (App Nap stays off while this is held: for good) */
 static volatile CGDirectDisplayID display_id;   /* the window's display, for display pacing */
@@ -96,7 +98,7 @@ static void show_pointer(void) {
 
 /* (every turn of the event loop) the pointer hides over the focused window after 2 s still */
 static void idle_pointer(Uint64 now) {
-    if (hide_cursor && !cursor_hidden && focused && SDL_GetMouseFocus() == window && now - mouse_moved_at > 2000) {
+    if (display_hide_cursor() && !cursor_hidden && focused && SDL_GetMouseFocus() == window && now - mouse_moved_at > 2000) {
         SDL_HideCursor();
         cursor_hidden = 1;
     }
@@ -166,6 +168,34 @@ static void key_down(const SDL_KeyboardEvent *k) {
         set_full(!full);
 }
 
+/* The settings menu's keys (gpu_menu.c): Esc always, the others while it is open. (Delete, the
+ * Mac's backspace, is SDL's backspace; fn+Delete its delete.) */
+static void menu_key_of(const SDL_KeyboardEvent *k) {
+    int key = 0;
+    switch (k->scancode) {
+    case SDL_SCANCODE_ESCAPE: if (!k->repeat) key = MENU_KEY_ESC; break;
+    case SDL_SCANCODE_UP: key = MENU_KEY_UP; break;
+    case SDL_SCANCODE_DOWN: key = MENU_KEY_DOWN; break;
+    case SDL_SCANCODE_LEFT: key = MENU_KEY_LEFT; break;
+    case SDL_SCANCODE_RIGHT: key = MENU_KEY_RIGHT; break;
+    case SDL_SCANCODE_RETURN: case SDL_SCANCODE_KP_ENTER: if (!k->repeat && !(k->mod & SDL_KMOD_ALT)) key = MENU_KEY_ENTER; break;
+    case SDL_SCANCODE_BACKSPACE: key = MENU_KEY_BACKSPACE; break;
+    case SDL_SCANCODE_DELETE: key = MENU_KEY_DELETE; break;
+    case SDL_SCANCODE_TAB: if (!k->repeat) key = k->mod & SDL_KMOD_SHIFT ? MENU_KEY_SHIFT_TAB : MENU_KEY_TAB; break;
+    default: break;
+    }
+    if (key && (key == MENU_KEY_ESC || menu_is_open())) menu_key(key);
+}
+
+/* Typed letters for the menu: SDL3 sends text only while text input is on, so it is on while
+ * the menu is open (not while playing: the input method would take keys such as a dead key). */
+static void menu_text_input(void) {
+    static int on;
+    int want = menu_is_open();
+    if (want == on || !window) return;
+    if (want ? SDL_StartTextInput(window) : SDL_StopTextInput(window)) on = want;
+}
+
 /* ---- start-up and the event loop ------------------------------------------------------------ */
 int rt_window_init(void) {
     if (!pthread_main_np()) { fprintf(stderr, "[gfx] the window must be made on the main thread\n"); return 0; }
@@ -218,7 +248,6 @@ int rt_window_init(void) {
     if (display_window_mode() != DISPLAY_WINDOWED) set_full(1);
     SDL_ShowWindow(window);
     [NSApp activate];   /* (started from a terminal, the game comes to the front all the same) */
-    hide_cursor = display_hide_cursor();
     mouse_moved_at = SDL_GetTicks();
     note_size();
     note_refresh();
@@ -271,14 +300,24 @@ _Noreturn void rt_window_loop(int every, void (*status)(void)) {
                 mouse_moved_at = SDL_GetTicks();
                 show_pointer();
                 break;
+            case SDL_EVENT_TEXT_INPUT:   /* (typed letters, for the settings menu) */
+                if (menu_is_open())
+                    for (const char *c = e.text.text; c && *c; c++) menu_char((unsigned char)*c);
+                break;
             case SDL_EVENT_KEY_DOWN:
+                menu_key_of(&e.key);
                 if (!e.key.repeat) key_down(&e.key);
                 break;
             }
             got = SDL_PollEvent(&e);
         }
         Uint64 now = SDL_GetTicks();
-        if (window) idle_pointer(now);
+        int asked = display_take_mode();   /* (the settings menu: borderless and fullscreen are both macOS's full screen) */
+        if (window && asked >= 0) set_full(asked != DISPLAY_WINDOWED);
+        if (window) {
+            menu_text_input();
+            idle_pointer(now);
+        }
         if (every > 0 && status && now - last >= (Uint64)every * 1000) {
             last = now;
             status();

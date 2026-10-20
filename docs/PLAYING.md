@@ -38,7 +38,7 @@ The first time you play online, the game picks a name for you, such as `Player12
 
 ## Settings
 
-Press <kbd>Esc</kbd> in the game to open the settings (on Windows and Linux; the macOS version doesn't have them yet, so there you edit the files below). On a controller, press its **Home** button (the PS or Xbox button), or hold **−** and **+** together for a second. Close the settings the same way, or with **B**.
+Press <kbd>Esc</kbd> in the game to open the settings. On a controller, press its **Home** button (the PS or Xbox button), or hold **−** and **+** together for a second. Close the settings the same way, or with **B**.
 
 | Page | What you can change |
 | :--- | :--- |

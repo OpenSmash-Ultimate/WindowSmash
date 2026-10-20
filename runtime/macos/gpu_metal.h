@@ -28,7 +28,8 @@
 /* The debug overlay (gpu_metal_overlay.m), as gpu_overlay.c's for Direct3D: called once per
  * presented frame, after the picture is drawn by enc into a target of `format` (at x, y, w x h):
  * notes the frame's time and, if show, draws the overlay over the picture; detail (lines separated
- * by '\n', or NULL) goes under the graph. Leaves the encoder's state changed. */
+ * by '\n', or NULL) goes under the graph. The settings menu, while open, is drawn instead of the
+ * overlay (menu_draw). Leaves the encoder's state changed. */
 void overlay_present_metal(id<MTLDevice> dev, id<MTLRenderCommandEncoder> enc, MTLPixelFormat format, unsigned x, unsigned y, unsigned w,
                            unsigned h, int show, const char *detail);
 

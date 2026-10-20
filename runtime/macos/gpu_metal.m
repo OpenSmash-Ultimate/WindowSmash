@@ -24,6 +24,7 @@
  * thread that calls (but the command stream's pending writes, below: kept_flush). */
 #define _CRT_SECURE_NO_WARNINGS
 #include "gpu_metal.h"
+#include "gpu_menu.h"
 #include <dirent.h>
 #include <math.h>
 #include <mach/mach.h>
@@ -4260,6 +4261,7 @@ void gfx_dispatch(const u32 *regs, const u32 *q) {
  * present waits for the oldest beyond that, as Direct3D's maximum frame latency makes it wait. */
 static volatile u64 frames_committed, frames_done;
 static dispatch_semaphore_t frames_free;
+static int frames_allowed;   /* (frames_free's count: display_latency(), or the settings menu's since) */
 static u64 gfx_stat_inflight, gfx_stat_inflight_frames, gfx_stat_present_ticks;
 
 static void gpu_timer_frame(void) {
@@ -4344,9 +4346,11 @@ void gfx_present(u64 guest, u32 width, u32 height) {
     if (f4_at == -1) f4_at = getenv("SSBU_F4_AT") ? atof(getenv("SSBU_F4_AT")) : -2;
     if (f4_at >= 0 && rt_now_ns() > (u64)(f4_at * 1e9)) { f4_at = -2; keys |= 8; }
     static int overlay = -1, details;
-    if (overlay < 0) overlay = !getenv("SSBU_OVERLAY") || atoi(getenv("SSBU_OVERLAY")) != 0;
+    if (overlay < 0) overlay = getenv("SSBU_OVERLAY") ? atoi(getenv("SSBU_OVERLAY")) != 0 : display_overlay();
     if (keys & 1) overlay = !overlay;
     if (keys & 2) { details = !details; overlay = 1; }
+    int menu_shot = menu_frame(&overlay, (keys & 4) != 0) & MENU_SHOT;   /* the settings menu (gpu_menu.c) */
+    if (menu_shot) keys &= ~4;
     if (keys & 4) {   /* F3: the frame as the game drew it (without the overlay) */
         mkdir("screenshots", 0755);
         SYSTEMTIME st;
@@ -4410,7 +4414,7 @@ void gfx_present(u64 guest, u32 width, u32 height) {
                  "draws %llu/frame  compute %llu/frame  GPU waits %llu  skipped %.0f/s\n"
                  "shaders %llu (%ld compiling, prewarm %ld/%ld)  textures %u  surfaces %u\n"
                  "GPU-resident buffers %u  write watch %.1f ms/s  depth sampling %s\n"
-                 "F1 overlay  F2 details  F3 screenshot  F4 log a frame\n"
+                 "Esc settings  F1 overlay  F2 details  F3 screenshot  F4 log a frame\n"
                  "F5 depth sampling on/off  F6 profile 10 s%s",
                  gpu_frames ? (double)(gfx_stat_inflight - last_inflight) / gpu_frames : 0.0,
                  (gfx_stat_present_ticks - last_present_ticks) * 1000.0 / (double)freq.QuadPart / frames,
@@ -4425,7 +4429,7 @@ void gfx_present(u64 guest, u32 width, u32 height) {
                  profile_running() ? "  (profiling...)" : "");
         char net[512];
         net_status(net, sizeof net);
-        snprintf(hint, sizeof hint, "F2 details%s%s%s%s", depth_sampling == 0 ? "  depth sampling OFF" : "",
+        snprintf(hint, sizeof hint, "F2 details  Esc settings%s%s%s%s", depth_sampling == 0 ? "  depth sampling OFF" : "",
                  profile_running() ? "  profiling..." : "", net[0] ? "\n" : "", net);
         if (net[0]) { size_t l = strlen(detail); snprintf(detail + l, sizeof detail - l, "\n%s", net); }
         char pads[256];
@@ -4467,6 +4471,18 @@ void gfx_present(u64 guest, u32 width, u32 height) {
      * what "Present blocked" counts. */
     LARGE_INTEGER p0, p1;
     QueryPerformanceCounter(&p0);
+    int latency = display_take_latency();   /* (changed in the settings menu) */
+    if (latency) {
+        for (; frames_allowed < latency; frames_allowed++) dispatch_semaphore_signal(frames_free);
+        for (; frames_allowed > latency; frames_allowed--) dispatch_semaphore_wait(frames_free, DISPATCH_TIME_FOREVER);   /* (a frame done) */
+        if (layer) {
+            [CATransaction begin];
+            [CATransaction setDisableActions:YES];
+            layer.maximumDrawableCount = latency >= 2 ? 3 : 2;
+            [CATransaction commit];
+        }
+        fprintf(stderr, "[gfx] %d-frame latency\n", latency);
+    }
     dispatch_semaphore_wait(frames_free, DISPATCH_TIME_FOREVER);
     if (layer) {
         int sync = !(display_present_flags() & 0x200);   /* (VRR pacing: shown at once, as Direct3D's ALLOW_TEARING) */
@@ -4498,6 +4514,16 @@ void gfx_present(u64 guest, u32 width, u32 height) {
         draw_builtin(renc, "ps", back.pixelFormat, MTLColorWriteMaskAll, (MTLViewport){fit_x, fit_y, fit_w, fit_h, 0, 1});
         overlay_present_metal(dev, renc, back.pixelFormat, fit_x, fit_y, fit_w, fit_h, overlay, details ? detail : hint);
         end_encoding();
+        if (menu_shot) {   /* F3 with the settings menu open: the window as it is, menu and all (waits for the GPU) */
+            mkdir("screenshots", 0755);
+            SYSTEMTIME st;
+            GetLocalTime(&st);
+            char path[128];
+            snprintf(path, sizeof path, "screenshots/ssbu_%04u%02u%02u_%02u%02u%02u_%03u_menu.bmp", st.wYear, st.wMonth, st.wDay, st.wHour,
+                     st.wMinute, st.wSecond, st.wMilliseconds);
+            save_bmp(back, "ps", path);   /* (through a draw: the drawable is BGRA) */
+            fprintf(stderr, "[gfx] screenshot: %s\n", path);
+        }
         [command() presentDrawable:drawable];
     }
     dispatch_semaphore_t free_ = frames_free;
@@ -4558,6 +4584,7 @@ static WINDOWS_BOOL CALLBACK init(PINIT_ONCE o, PVOID p, PVOID *c) {
         }
         int latency = display_latency();
         frames_free = dispatch_semaphore_create(latency);
+        frames_allowed = latency;
         if (layer) {   /* (macos/window.m made it: BGRA8 in sRGB, at the window's size in pixels) */
             [CATransaction begin];
             [CATransaction setDisableActions:YES];

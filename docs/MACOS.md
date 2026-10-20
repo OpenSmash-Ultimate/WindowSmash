@@ -157,6 +157,11 @@ Terminal window that shows the game's log as it goes; closing that window leaves
   as macOS sizes windows: on a Retina display each point is 2×2 pixels. `borderless` and
   `fullscreen` are both macOS's full screen, in a space of its own. `render_scale` isn't supported
   on a Mac yet: the game always draws at 1920 × 1080 and is fitted into the window.
+- **Settings:** press <kbd>Esc</kbd> in the game, or a controller's **Home** button, as on Windows
+  ([Settings](PLAYING.md#settings)). The Mac has no **Render scale** or **Graphics card** row, and
+  **Open controllers.ini** opens the file in your text editor. Changes on the **Online** page count
+  the next time you start the game with **Play SSBU**: **Restart the game** keeps the lobby and name it
+  started with.
 - When the game asks for text, such as a name, a small window opens over the game for you to type
   it in.
 
@@ -179,6 +184,7 @@ On a Mac keyboard the top row controls the brightness, volume and so on, and the
 
 | Key | Or | What it does |
 | :--- | :--- | :--- |
+| <kbd>Esc</kbd> | | Opens or closes the [settings](PLAYING.md#settings). |
 | <kbd>F1</kbd> | <kbd>⌘</kbd>+<kbd>1</kbd> | Shows or hides the overlay: frame rate and, online, the connection. |
 | <kbd>F2</kbd> | <kbd>⌘</kbd>+<kbd>2</kbd> | Shows more details, including the connected pads and the host's address. |
 | <kbd>F3</kbd> | <kbd>⌘</kbd>+<kbd>3</kbd> | Takes a screenshot (into `screenshots/`). |

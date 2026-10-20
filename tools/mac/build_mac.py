@@ -61,10 +61,10 @@ ICON = os.path.join(REPO, "docs", "assets", "windowsmash.ico")
 RUNTIME_INCLUDES = ["-I", os.path.join(RUNTIME, "macos", "include"), "-I", os.path.join(RUNTIME, "linux", "include"),
                     "-I", RUNTIME, "-I", GEN, "-F", SDL3_DIR, "-I", os.path.join(REPO, "third_party", "libvpx")]
 RUNTIME_DEFINES = ["-DSSBU_HAVE_OPUS", "-DSSBU_HAVE_VPX", "-DSSBU_HAVE_SDL3"]
-# runtime/*.c as on Linux, but for Direct3D 11 and its overlay: the Metal renderer (runtime/macos) instead.
-# The settings menu (gpu_menu.c) draws with that overlay, so it is not here yet (macos/platform.c: no menu).
+# runtime/*.c as on Linux, but for Direct3D 11 and its overlay: the Metal renderer (runtime/macos) instead
+# (its overlay draws the settings menu, gpu_menu.c, too)
 RUNTIME_PATTERN = r"(host|kernel|gpu\w*|hle\w*|ipc\w*|net\w*|debug_watchdog)\.c"
-RUNTIME_LEFT_OUT = ("gpu_d3d11.c", "gpu_overlay.c", "gpu_menu.c")
+RUNTIME_LEFT_OUT = ("gpu_d3d11.c", "gpu_overlay.c")
 LINUX_PARTS = ("win32.c", "upnp.c", "eh.cpp")   # (runtime/linux: the Win32 calls on POSIX, UPnP, C++ landing sites)
 MAC_SOURCES = (".c", ".m", ".cpp", ".S")
 FRAMEWORKS = ("SDL3", "Metal", "QuartzCore", "AppKit", "Foundation", "CoreFoundation", "IOKit", "CoreGraphics")
@@ -330,9 +330,9 @@ def overlay_font():
         code, out = r.returncode, r.stdout + r.stderr
         print(out.strip())
     if code:   # (only the debug overlay's text needs it: not worth stopping the build for)
-        print(f"could not draw the overlay font: the overlay (F1, F2) shows no text\n{out.strip()[:2000]}")
+        print(f"could not draw the overlay font: the overlay (F1, F2) and the settings menu show no text\n{out.strip()[:2000]}")
         with open(header, "w", newline="\n") as f:
-            f.write("static const unsigned char overlay_font[%d] = {0};\n" % (12 * 16 * 24 * 6))
+            f.write("static const unsigned char overlay_font[%d] = {0};\n" % (24 * 16 * 48 * 6))
 
 
 def ico_png(path, size=256):

@@ -146,8 +146,9 @@ Terminal window that shows the game's log as it goes; closing that window leaves
 | `launchers/Unlock All Fighters.command` | `Unlock All Fighters.bat` | Unlocks every base-game fighter on your save ([DLC and unlocks](DLC-AND-UNLOCKS.md)). Close the game first. |
 | `launchers/Build WindowSmash.command` | `Build WindowSmash.bat` | Builds the game from your files, when the installer has set up the tools. |
 
-- The first time you play online, it asks for the name other players see and keeps it in
-  `online_name.txt`.
+- The name other players see online is the one you gave the installer. Without one, the game picks
+  one, such as `Player1234`. To change it, open the [settings](PLAYING.md#settings) and go to
+  **Online**.
 - With [more than one game version](VERSIONS.md) built, the launchers ask which one to start. The one
   you picked last is the default. Every player in a room needs the same game version.
 - There is no **Prepare Shaders** on a Mac yet: each shader is compiled when it is first needed, so a
@@ -159,9 +160,7 @@ Terminal window that shows the game's log as it goes; closing that window leaves
   on a Mac yet: the game always draws at 1920 × 1080 and is fitted into the window.
 - **Settings:** press <kbd>Esc</kbd> in the game, or a controller's **Home** button, as on Windows
   ([Settings](PLAYING.md#settings)). The Mac has no **Render scale** or **Graphics card** row, and
-  **Open controllers.ini** opens the file in your text editor. Changes on the **Online** page count
-  the next time you start the game with **Play SSBU**: **Restart the game** keeps the lobby and name it
-  started with.
+  **Open controllers.ini** opens the file in your text editor.
 - When the game asks for text, such as a name, a small window opens over the game for you to type
   it in.
 

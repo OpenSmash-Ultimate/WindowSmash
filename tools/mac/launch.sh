@@ -6,9 +6,10 @@
 #   launch.sh [--gui] play|offline|host|join|unlock|build [arguments for unlock_all.py or build_game.py]
 #
 #   play     the game, online: it joins the lobby online_server.txt names, where Local Wireless lists
-#            everyone's rooms (docs/MULTIPLAYER.md), as the name in online_name.txt (asked the first
-#            time); off in online_direct.txt keeps a room's traffic going through the lobby. If the
-#            lobby does not answer, the game plays offline
+#            everyone's rooms (docs/MULTIPLAYER.md), as the name in online_name.txt (the game picks
+#            one when there is none); off in online_direct.txt keeps a room's traffic going through
+#            the lobby. The game reads those files itself (--online), so the settings menu's changes
+#            count when it starts again. If the lobby does not answer, the game plays offline
 #   offline  the game without going online
 #   host     the game as the host of a private room: it runs the relay the others join (UDP port
 #            39420, opened on the router with UPnP when the router allows it); the address to give
@@ -108,7 +109,7 @@ lower() {
     printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
 }
 
-# What Play SSBU.bat clears (the others keep the room and name variables: they ask for them)
+# What Play SSBU.bat clears (host and join keep the room and name variables: they ask for them)
 clear_net() {
     unset SSBU_DATA_ROOT SSBU_INPUT SSBU_NET_HOST SSBU_NET_RELAY SSBU_NET_BIND "$@"
 }
@@ -134,11 +135,12 @@ pick_game() {
     done < <(if [ "$(head -n 1 "$cfg" | tr -d '\r')" = layered ]; then tail -n +2 "$cfg"; else head -n 1 "$cfg"; fi)
 }
 
-# Online play (docs/MULTIPLAYER.md): the lobby is the first line of online_server.txt that is not a
-# comment - host:port, then an optional lobby code (only players with the same code see each other's
-# rooms) - or "off". The name the other players see is kept in online_name.txt, asked the first time.
+# Online play (docs/MULTIPLAYER.md): what the game reads with --online, said here. The lobby is the
+# first line of online_server.txt that is not a comment - host:port, then an optional lobby code
+# (only players with the same code see each other's rooms) - or "off"; the name the other players
+# see is in online_name.txt (the game picks one and keeps it there when there is none).
 go_online() {
-    local relay code rest name pick direct
+    local relay code rest name
     if [ -f online_server.txt ]; then
         while read -r relay code rest || [ -n "$relay" ]; do
             relay=${relay%$'\r'} code=${code%$'\r'}
@@ -147,54 +149,27 @@ go_online() {
             esac
             break
         done < online_server.txt
-        [ "$(lower "$relay")" = off ] && relay=
-        if [ -n "$relay" ]; then
-            SSBU_NET_RELAY=$relay
-            [ -n "$code" ] && SSBU_NET_ROOM=$code
-        fi
+        [ "$(lower "$relay")" = off ] && relay= code=
     fi
-    if [ -n "$SSBU_NET_RELAY" ]; then
-        if [ ! -f online_name.txt ]; then
-            pick="Player$((RANDOM % 9000 + 1000))"
-            say "Online, other players see your name (it is kept in online_name.txt)."
-            name=$(ask "Your online name" "$pick") || exit 0
-            printf '%s\n' "$name" > online_name.txt
-        fi
+    if [ -z "$relay" ]; then
+        say "Playing offline (no lobby in online_server.txt)."
+        return 0
+    fi
+    if [ -f online_name.txt ]; then
         while IFS= read -r name || [ -n "$name" ]; do
             name=${name%$'\r'}
-            if [ -n "$name" ]; then
-                SSBU_NET_NAME=$name
-                break
-            fi
+            [ -n "$name" ] && break
         done < online_name.txt
     fi
-    # "off" in online_direct.txt: all of a room's traffic through the lobby (no direct connections, so
-    # the players in your rooms don't learn your internet address)
-    if [ -f online_direct.txt ]; then
-        while read -r direct rest || [ -n "$direct" ]; do
-            direct=${direct%$'\r'}
-            case "$direct" in
-                '' | '#'*) direct= ; continue ;;
-            esac
-            [ "$(lower "$direct")" = off ] && SSBU_NET_DIRECT=0
-            direct=
-        done < online_direct.txt
-    fi
-    if [ -z "$SSBU_NET_RELAY" ]; then
-        say "Playing offline (no lobby in online_server.txt)."
-    else
-        say "Online: lobby $SSBU_NET_RELAY${SSBU_NET_ROOM:+ (lobby code $SSBU_NET_ROOM)}, as ${SSBU_NET_NAME:-the name the game picks}."
-        say "To play offline: launchers/Play SSBU Offline.command"
-    fi
-    for name in SSBU_NET_RELAY SSBU_NET_ROOM SSBU_NET_NAME SSBU_NET_DIRECT; do
-        [ -n "${!name}" ] && export "$name"
-    done
+    say "Online: lobby $relay${code:+ (lobby code $code)}, as ${name:-the name the game picks}."
+    say "To change them: Esc in the game. To play offline: launchers/Play SSBU Offline.command"
     return 0
 }
 
-# Starts the game: open -W, in the background ($opener), waits for it to close. The environment's
-# SSBU_* variables go to the game (open passes those it is given), with where the port is (the game
-# starts in it: its settings, screenshots/ and reports/ are there) and where its log goes.
+# Starts the game (with the arguments given, after its own): open -W, in the background ($opener),
+# waits for it to close. The environment's SSBU_* variables go to the game (open passes those it is
+# given), with where the port is (the game starts in it: its settings, screenshots/ and reports/ are
+# there) and where its log goes.
 launch() {
     local app="$tree/build-mac/WindowSmash.app" name
     local args
@@ -209,7 +184,7 @@ launch() {
             SSBU_*) args+=(--env "$name=${!name}") ;;
         esac
     done
-    open "${args[@]}" -a "$app" --args "$tree/dump/modules" --status 30 2> "$opened" &
+    open "${args[@]}" -a "$app" --args "$tree/dump/modules" --status 30 "$@" 2> "$opened" &
     opener=$!
     trap 'kill $tailer $opener 2>/dev/null; exit 130' INT TERM HUP
 }
@@ -250,16 +225,16 @@ follow() {
 }
 
 mode_play() {
-    clear_net SSBU_NET_ROOM SSBU_NET_NAME
+    clear_net SSBU_NET_ROOM SSBU_NET_NAME SSBU_NET_DIRECT SSBU_NET_PORT
     pick_game
     go_online
-    launch
+    launch --online
     say "Starting the game..."
     follow
 }
 
 mode_offline() {
-    clear_net SSBU_NET_ROOM SSBU_NET_NAME
+    clear_net SSBU_NET_ROOM SSBU_NET_NAME SSBU_NET_DIRECT SSBU_NET_PORT
     pick_game
     launch
     say "Starting the game, offline..."

@@ -903,59 +903,46 @@ class LaunchScriptTests(unittest.TestCase):
         return subprocess.run([BASH, '-c', script], capture_output=True, text=True, input=stdin,
                               env={**clean, **(env or {})}, timeout=60)
 
-    ONLINE = ('go_online >/dev/null; echo "R=$SSBU_NET_RELAY|C=$SSBU_NET_ROOM|N=$SSBU_NET_NAME|D=$SSBU_NET_DIRECT"; '
-              'env | grep -c "^SSBU_NET_"; true')
-
-    def online(self, server, name=None, direct=None, stdin=''):
+    def online(self, server, name=None, direct=None, stdin='', gui=False, env=None):
+        """go_online on these files: the lines it says. It sets no SSBU_NET_* variable: the game reads
+        the files itself (--online)."""
         for f, text in (('online_server.txt', server), ('online_name.txt', name), ('online_direct.txt', direct)):
             p = self.top / f
             if text is None:
                 p.unlink(missing_ok=True)
             else:
                 p.write_bytes(text.encode())
-        r = self.sh(self.ONLINE, stdin)
+        r = self.sh('go_online; echo "set: $(set | grep -c "^SSBU_NET_")"', stdin, env=env, gui=gui)
         self.assertEqual(r.returncode, 0, r.stderr)
         lines = r.stdout.splitlines()
-        return lines[0], int(lines[1])
+        self.assertEqual(lines[-1], 'set: 0')
+        return lines[:-1]
 
     def test_online_server(self):
         head = '# The online lobby\n# host:port, then an optional lobby code\n\n'
-        self.assertEqual(self.online(head + 'smash.example:39421\n', 'Mario\n'), ('R=smash.example:39421|C=|N=Mario|D=', 2))
+        change = 'To change them: Esc in the game. To play offline: launchers/Play SSBU Offline.command'
+        self.assertEqual(self.online(head + 'smash.example:39421\n', 'Mario\n'),
+                         ['Online: lobby smash.example:39421, as Mario.', change])
         self.assertEqual(self.online(head + '  lobby.example:39420   FRIENDS  extra\n', 'Mario\n')[0],
-                         'R=lobby.example:39420|C=FRIENDS|N=Mario|D=')
+                         'Online: lobby lobby.example:39420 (lobby code FRIENDS), as Mario.')
         self.assertEqual(self.online((head + 'lobby.example:1 CODE\n').replace('\n', '\r\n'), '\r\nLuigi\r\n')[0],
-                         'R=lobby.example:1|C=CODE|N=Luigi|D=')
-        self.assertEqual(self.online(head + 'lobby.example:1', 'Peach')[0], 'R=lobby.example:1|C=|N=Peach|D=')   # (no last newline)
-        self.assertEqual(self.online(head + 'OFF CODE\nlobby.example:1\n', 'Mario\n'), ('R=|C=|N=|D=', 0))
-        self.assertEqual(self.online(head, 'Mario\n'), ('R=|C=|N=|D=', 0))
-        self.assertEqual(self.online(None, 'Mario\n'), ('R=|C=|N=|D=', 0))
-        self.assertEqual(self.online(head + 'a.example:1\n', 'Mario\n', '# a comment\noff\n'), ('R=a.example:1|C=|N=Mario|D=0', 3))
-        self.assertEqual(self.online(head + 'a.example:1\n', 'Mario\n', 'on\nOff  # all through the lobby\n')[0],
-                         'R=a.example:1|C=|N=Mario|D=0')
-        self.assertEqual(self.online(head + 'a.example:1\n', 'Mario\n', 'on\n')[0], 'R=a.example:1|C=|N=Mario|D=')
-        self.assertEqual(self.online('off\n', None, 'off')[0], 'R=|C=|N=|D=0')   # (as Play SSBU.bat: read either way)
-        self.assertFalse((self.top / 'online_name.txt').exists())                # (offline: no name asked)
+                         'Online: lobby lobby.example:1 (lobby code CODE), as Luigi.')
+        self.assertEqual(self.online(head + 'lobby.example:1', 'Peach')[0], 'Online: lobby lobby.example:1, as Peach.')   # (no last newline)
+        offline = ['Playing offline (no lobby in online_server.txt).']
+        self.assertEqual(self.online(head + 'OFF CODE\nlobby.example:1\n', 'Mario\n'), offline)
+        self.assertEqual(self.online(head, 'Mario\n'), offline)
+        self.assertEqual(self.online(None, 'Mario\n'), offline)
+        self.assertEqual(self.online(head + 'a.example:1\n', 'Mario\n', 'off\n')[0], 'Online: lobby a.example:1, as Mario.')
 
-    def test_name_asked_the_first_time(self):
-        self.assertEqual(self.online('a.example:1\n', None, None, 'Samus Aran\n')[0], 'R=a.example:1|C=|N=Samus Aran|D=')
-        self.assertEqual((self.top / 'online_name.txt').read_text(), 'Samus Aran\n')
-        (self.top / 'online_name.txt').unlink()
-        line = self.online('a.example:1\n', None, None, '\n')[0]
-        self.assertRegex(line, r'^R=a\.example:1\|C=\|N=Player\d{4}\|D=$')
-        self.assertRegex((self.top / 'online_name.txt').read_text(), r'^Player\d{4}\n$')
-
-    def test_name_dialog(self):
+    def test_name_left_to_the_game(self):
+        """No name in online_name.txt: nothing is asked (the game picks one and keeps it there)."""
+        picks = 'Online: lobby a.example:1, as the name the game picks.'
+        self.assertEqual(self.online('a.example:1\n', None, None, 'Samus Aran\n')[0], picks)
+        self.assertFalse((self.top / 'online_name.txt').exists())
+        self.assertEqual(self.online('a.example:1\n', '\n\n')[0], picks)
         fake = FakeOsascript(self, ['=Zelda'])
-        (self.top / 'online_server.txt').write_text('a.example:1\n')
-        r = self.sh('go_online; echo "N=$SSBU_NET_NAME"', env=fake.env, gui=True)
-        self.assertEqual(r.stdout.strip(), 'N=Zelda')   # (and nothing else said: no window to say it in)
-        argv = fake.calls[0][0]
-        self.assertEqual(argv[0], 'Your online name')
-        self.assertRegex(argv[1], r'^Player\d{4}$')
-        fake = FakeOsascript(self, [''])                # cancelled: nothing starts
-        (self.top / 'online_name.txt').unlink()
-        r = self.sh('go_online; echo "not here"', env=fake.env, gui=True)
-        self.assertEqual((r.returncode, r.stdout), (0, ''))
+        self.assertEqual(self.online('a.example:1\n', None, gui=True, env=fake.env), [])   # (nothing said: no window to say it in)
+        self.assertEqual(fake.calls, [])
         self.assertFalse((self.top / 'online_name.txt').exists())
 
     def test_version_trees(self):
@@ -1111,15 +1098,16 @@ class OpenTests(unittest.TestCase):
         (self.top / 'online_name.txt').write_text('Tester\n')
         (self.top / 'online_direct.txt').write_text('off\n')
         r = self.run_launcher('Play SSBU.command', SSBU_HITCH='40', SSBU_NET_HOST='1', SSBU_DATA_ROOT='/elsewhere',
-                              SSBU_NET_BIND='127.0.0.1', SSBU_NET_ROOM='mine', SSBU_LOG='/tmp/not-this', SSBU_CWD='/tmp')
+                              SSBU_NET_BIND='127.0.0.1', SSBU_NET_ROOM='mine', SSBU_NET_DIRECT='1', SSBU_NET_PORT='1',
+                              SSBU_LOG='/tmp/not-this', SSBU_CWD='/tmp')
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         cwd, args, env = self.record()
-        self.assertEqual(args, [f'{tree}/dump/modules', '--status', '30'])
+        self.assertEqual(args, [f'{tree}/dump/modules', '--status', '30', '--online'])
         self.assertEqual(cwd, 'cwd=/')   # (open starts apps in /: the runtime goes to SSBU_CWD)
-        # (what Play SSBU.bat clears is gone, SSBU_LOG and SSBU_CWD are the launcher's, the rest passes on)
+        # (what Play SSBU.bat clears is gone, SSBU_LOG and SSBU_CWD are the launcher's, the rest passes on;
+        # the lobby, name and direct connections are the game's to read from the files: --online)
         self.assertEqual(env, {'SSBU_CWD': str(self.top), 'SSBU_LOG': f'{tree}/build/play.log', 'SSBU_HITCH': '40',
-                               'SSBU_NET_RELAY': 'lobby.example:39421', 'SSBU_NET_ROOM': 'FRIENDS',
-                               'SSBU_NET_NAME': 'Tester', 'SSBU_NET_DIRECT': '0', 'SSBU_TREE': '.'})
+                               'SSBU_TREE': '.'})
         self.assertIn('Online: lobby lobby.example:39421 (lobby code FRIENDS), as Tester.', r.stdout)
         self.assertIn('stand-in game: running', r.stdout)   # (the log, shown as it goes)
         self.assertEqual((tree / 'build' / 'play.log').read_text(), 'stand-in game: running\n')

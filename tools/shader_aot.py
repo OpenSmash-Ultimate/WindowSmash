@@ -229,31 +229,75 @@ def build_tool_linux(exe, sources):
         raise SystemExit("cannot build shaderaot:\n" + (r.stdout + r.stderr)[-3000:])
 
 
+def total_ram_gb():
+    """Physical RAM in GB, or None if it cannot be found."""
+    try:
+        if LINUX:
+            return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / (1 << 30)
+        import ctypes
+
+        class MemStatus(ctypes.Structure):
+            _fields_ = [("length", ctypes.c_ulong), ("load", ctypes.c_ulong),
+                        ("total", ctypes.c_ulonglong), ("avail", ctypes.c_ulonglong),
+                        ("tpf", ctypes.c_ulonglong), ("apf", ctypes.c_ulonglong),
+                        ("tv", ctypes.c_ulonglong), ("av", ctypes.c_ulonglong),
+                        ("ave", ctypes.c_ulonglong)]
+        st = MemStatus()
+        st.length = ctypes.sizeof(st)
+        ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(st))
+        return st.total / (1 << 30)
+    except (ValueError, OSError, AttributeError):
+        return None
+
+
+def max_jobs_for_ram():
+    """As many processes as the RAM holds: each reads the whole pack of programs (about 0.4 GB)
+    and translates them, so budget about 2 GB each."""
+    gb = total_ram_gb()
+    return max(1, int(gb // 2)) if gb else 1 << 30
+
+
 def default_jobs():
-    """One process per core but two (the PC stays usable), and as many as the RAM holds: each
-    reads the whole pack of programs (about 0.4 GB) and translates them."""
-    jobs = max(1, (os.cpu_count() or 2) - 2)
-    if LINUX:
-        try:
-            gb = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / (1 << 30)
-            jobs = min(jobs, max(1, int(gb // 2)))
-        except (ValueError, OSError):
-            pass
-    return jobs
+    """One process per core but two (the PC stays usable), and as many as the RAM holds."""
+    return max(1, min((os.cpu_count() or 2) - 2, max_jobs_for_ram()))
 
 
-def low_priority():
-    """Popen's arguments that run the compile below normal priority."""
+def all_jobs():
+    """One process per core (the PC will be slow meanwhile), as far as the RAM holds."""
+    return max(1, min(os.cpu_count() or 2, max_jobs_for_ram()))
+
+
+PRIORITIES = ("low", "normal", "high")
+
+
+def set_priority(level):
+    """Popen's arguments that run the compile at the given priority: low, normal or high."""
     if LINUX:
-        return {"preexec_fn": lambda: os.nice(10)}
-    return {"creationflags": getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0)}
+        nice = {"low": 10, "normal": 0, "high": -10}[level]
+
+        def apply():
+            try:
+                os.nice(nice)
+            except PermissionError:    # negative values need root: fall back to normal
+                pass
+        return {"preexec_fn": apply}
+    name = {"low": "BELOW_NORMAL_PRIORITY_CLASS", "normal": "NORMAL_PRIORITY_CLASS",
+            "high": "HIGH_PRIORITY_CLASS"}[level]
+    return {"creationflags": getattr(subprocess, name, 0)}
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[1])
-    ap.add_argument("--jobs", type=int, default=default_jobs())
+    ap.add_argument("--jobs", type=int, default=default_jobs(),
+                    help="number of processes (default: cores - 2); 0 = one per core")
+    ap.add_argument("--priority", choices=PRIORITIES, default="low",
+                    help="process priority (default: low, so the PC stays usable)")
     ap.add_argument("--dry", action="store_true")
     a = ap.parse_args()
+    if a.jobs <= 0:
+        a.jobs = all_jobs()
+    if a.jobs > max_jobs_for_ram():
+        print(f"warning: {a.jobs} processes need about {a.jobs * 2} GB of RAM, this PC may run out of it", flush=True)
     tree = ROOT
     t0 = time.time()
     arc = A.Arc(os.path.join(tree, "dump", "modules", "romfs.cfg"))
@@ -280,13 +324,13 @@ def main():
     jobs = 1 if a.dry else a.jobs
     procs = [subprocess.Popen([exe, pack, cache, str(i), str(jobs)] + (["--dry"] if a.dry else []),
                               stdout=subprocess.PIPE if a.dry else subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
-                              **low_priority())
+                              **set_priority(a.priority))
              for i in range(jobs)]
     if a.dry:
         outs = [p.communicate() for p in procs]
         print("\n".join(line for _out, err in outs for line in err.splitlines() if line.startswith("part ")))
     else:
-        print(f"compiling with {jobs} processes at low priority (the PC stays usable; stop it with " + ("Ctrl+C" if LINUX else "closing this window") + ": "
+        print(f"compiling with {jobs} processes at {a.priority} priority (stop it with " + ("Ctrl+C" if LINUX else "closing this window") + ": "
               "what is done stays done)", flush=True)
         parts = follow(procs, Progress(sys.stdout))
         print(summary(parts) or "\n".join(parts))

@@ -1,6 +1,6 @@
 param(
     [string]$SavePath,
-    [string]$Tree,
+    [string]$Root,
     [switch]$DryRun
 )
 
@@ -8,30 +8,28 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 try {
-    $installRoot = Split-Path -Parent $PSScriptRoot
-    # The game version's folder (the port's own, or e.g. v13.0.5): the save layout depends on
-    # the version, known by its main module's build id (the same table as tools/unlock_all.py).
-    if (-not $Tree) { $Tree = $installRoot } elseif (-not [System.IO.Path]::IsPathRooted($Tree)) { $Tree = Join-Path $installRoot $Tree }
+    # The WindowSmash folder (-Root: tests). The save layout is 13.0.5's, known by the main
+    # module's build id (the same table as tools/unlock_all.py).
+    $Folder = if ($Root) { $Root } else { Split-Path -Parent $PSScriptRoot }
     # build id = game version, save size, FLAGS, RECORDS
     $knownLayouts = @{
-        '4A3F8ED7DCCE3AD4541A3A2F7622B5B57FC8A55C' = @('11.0.0', 0x5B4AF8, 0x53FF40, 0x54FEA8)
         '21450C647B8C5940ED5B68218EA128FD3C5D597D' = @('13.0.5', 0x5B4AF8, 0x53FF40, 0x54FEA8)
     }
     $knownVersions = ($knownLayouts.Values | ForEach-Object { $_[0] } | Sort-Object) -join ', '
-    $mainPath = Join-Path $Tree 'dump\exefs\main'
-    if (-not (Test-Path -LiteralPath $mainPath -PathType Leaf)) { throw "No game in $Tree (dump\exefs\main is missing)." }
+    $mainPath = Join-Path $Folder 'dump\exefs\main'
+    if (-not (Test-Path -LiteralPath $mainPath -PathType Leaf)) { throw "No game in $Folder (dump\exefs\main is missing)." }
     $stream = [System.IO.File]::OpenRead($mainPath)
     try { $head = New-Object byte[] 0x60; [void]$stream.Read($head, 0, 0x60) } finally { $stream.Close() }
     $buildId = (($head[0x40..0x5F] | ForEach-Object { $_.ToString('X2') }) -join '').TrimEnd('0')
     if (-not $knownLayouts.ContainsKey($buildId)) {
-        $versionFile = Join-Path $Tree 'version.txt'
+        $versionFile = Join-Path $Folder 'version.txt'
         $version = if (Test-Path -LiteralPath $versionFile) { (Get-Content -LiteralPath $versionFile -TotalCount 1) } else { 'unknown' }
         throw "That is game version $version; this tool knows the save layout of $knownVersions only, so it changes nothing."
     }
     $version, $saveSize, $flagsOffset, $recordsOffset = $knownLayouts[$buildId]
-    Write-Host ('Game version ' + $version + ': ' + $Tree)
+    Write-Host ('Game version ' + $version + ': ' + $Folder)
     if (-not $SavePath) {
-        $SavePath = Join-Path $Tree 'save\0123456789abcdeffedcba9876543210\save_data\system_data.bin'
+        $SavePath = Join-Path $Folder 'save\0123456789abcdeffedcba9876543210\save_data\system_data.bin'
     }
     if (@(Get-Process -Name ssbu,ssbu_new -ErrorAction SilentlyContinue).Count -gt 0) {
         throw 'Close every SSBU game window before unlocking fighters, then run this again.'

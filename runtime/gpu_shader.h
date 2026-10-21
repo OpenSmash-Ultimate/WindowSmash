@@ -147,9 +147,11 @@ typedef struct DrawParams {
     u32 attr[32][4];       /* vertex attribute: format word, stream stride, instance divisor (0: per vertex), stream bound */
     float fix[4];          /* clip-space fix-up: x sign, y sign, z scale, z offset */
     float frag[4];         /* fragment y: flip (nonzero), render target height; alpha test: passing outcomes (bits, not a float), reference */
-    u32 base[4];           /* base vertex, base instance */
-    u32 swz[2][32];        /* per texture of each stage (vertex, pixel): component sources, 3 bits each (MSL: bits 12-24 the sampler's LOD bias) */
-    u32 sb[2][16][4];      /* per storage buffer of each stage: GPU address low, high, size */
+    u32 base[4];           /* base vertex, base instance; 1 / the render targets' render scale in x, y (float bits) */
+    u32 swz[2][32];        /* per texture of each stage (vertex, pixel): component sources, 3 bits each; a render target's render
+                            * scale (4.12, 0: 1) in bits 16-31 - MSL: bits 12-24 the sampler's LOD bias, and the scale in sb */
+    u32 sb[2][16][4];      /* per storage buffer of each stage: GPU address low, high, size; MSL: in the fourth word, textures 2i
+                            * and 2i + 1's render scale, as swz has it in HLSL (the low half texture 2i's) */
 } DrawParams;
 
 /* Bytes of a program up to its end (header included), reading at most `max`. */
@@ -157,3 +159,5 @@ u32 shader_size(const u8 *program, u32 max);
 /* Does the program read its pixel's position or step in texels (its translation then takes the
  * render scale into account)? */
 int shader_uses_pixels(const u8 *program, u32 size, int stage);
+/* Does the program use the SSY/PBK stacks (translated without them since)? */
+int shader_uses_stacks(const u8 *program, u32 size);

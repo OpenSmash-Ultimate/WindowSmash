@@ -1,68 +1,31 @@
-"""What game version trees share: NRO load addresses, compiled module build dirs, and the
-check that every module's imports resolve. Used by tools/recomp.py.
+"""What tools/recomp.py keeps between builds: NRO load addresses, the stamp that says a module's
+build dir is current, and the check that every module's imports resolve.
 
-A tree is the port's own folder or a game version's folder laid out like it (dump/, build/,
-save/: tools/install_version.py). Versions share much of their code: sdk and subsdk0 are the
-same from 11.0.0 to 13.0.5, and fighter modules (NROs) can be the same between nearby updates.
-A module is known by its build id, and its generated C and objects depend only on its bytes,
-its load address and the tools, so a module another tree already built is reused as it is.
-
-NRO load addresses (registry): <port>/module_bases.txt, "<build id> <name> <base> <end>",
-shared by every tree, so a module keeps one address in every version. It starts as every
-tree's dump/nro/bases.txt (the per-tree record, which stays the authority for that tree). A
-new module goes past every module of every tree, so that no version's module is in another's
-way later; once the space for NROs is used up, it takes any free slots of its own tree.
+NRO load addresses: dump/nro/bases.txt, "<name> <base> <end> <build id>", one row per fighter
+module (NRO) the game has, each placed for good (place) so that rebuilding never moves one.
 Modules must not share a 16 MB dispatch slot (runtime/host.c SLOT_SHIFT), and NROs live
 between subsdk/sdk's slots and the heap: [0x7200000000, 0x7400000000), 512 slots.
 
 Module build dirs: each holds a stamp, module.txt: "<build id> <base> <name> <tools
 fingerprint>", written once its C is generated and compiled (by a build that compiles it
-elsewhere - Linux, macOS: recomp.py all --generate-only - once it is generated). A tree that lacks
-a module's dir takes the files of another tree's dir for the same build id and base: hard links
-when the volume allows (instant, no space), else copies, with their times, so objects stay up to
-date; a dir with its objects is taken before one without. A dir with only its C is taken on
-macOS alone (ADOPT_C_ONLY): its C keeps the other tree's (older) times, and tools/mac/build_mac.py
-compiles an object again when its C is another file than the one it was compiled from, where
-tools/linux/build_linux.py goes by the times only - it would keep and link the objects of the
-module the tree had before.
-recomp.py replaces a file rather than writing into it (write_if_changed, compile_dir), so a
-tree never changes another's files through a link. With the same tools fingerprint (the
-generator's sources and the runtime's native-function set) the C is not generated again.
+elsewhere - Linux, macOS: recomp.py all --generate-only - once it is generated). With the same
+build id, base and tools fingerprint (the generator's sources and the runtime's native-function
+set) the C is not generated again. recomp.py replaces a file rather than writing into it
+(write_if_changed, compile_dir): a file can be a hard link that an earlier WindowSmash, which
+shared build dirs between game versions, made to another folder's.
 """
 import hashlib
 import os
 import re
-import shutil
-import sys
 
 TOOLS = os.path.dirname(os.path.abspath(__file__))
-ROOT = os.path.dirname(TOOLS)
-REGISTRY = os.path.join(ROOT, "module_bases.txt")
 NRO_BASE, NRO_LIMIT, SLOT = 0x7200000000, 0x7400000000, 0x1000000
-FIXED = ("main", "subsdk0", "sdk")
 # the sources whose output is the generated C (a change in any of them generates it again)
 GENERATOR = ("recomp.py", "lift.py", "lift_simd.py", "a64.py", "funcs.py", "eh.py", "nso.py", "regcache.py")
-# whether a module dir with only its C (no objects: recomp.py all --generate-only) is lent to other
-# trees: on macOS, whose build tracks the C each object was compiled from (see above)
-ADOPT_C_ONLY = sys.platform == "darwin"
-
-
-def trees():
-    """The port's own folder, then every folder in it laid out like it (with a dump/)."""
-    out = [ROOT]
-    for n in sorted(os.listdir(ROOT)):
-        p = os.path.join(ROOT, n)
-        if n not in ("dump", "build") and os.path.isdir(os.path.join(p, "dump")):
-            out.append(p)
-    return out
-
-
-def same_path(a, b):
-    return os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(b))
 
 
 def replace_file(path, text):
-    """Write a file as a new one (never through a link another tree shares)."""
+    """Write a file as a new one (never through a hard link to another folder's)."""
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8", newline="\n") as f:
         f.write(text)
@@ -71,64 +34,30 @@ def replace_file(path, text):
 
 # ---- NRO load addresses -------------------------------------------------------------
 def read_bases(path):
-    """[name, base, end, build id] rows of a tree's dump/nro/bases.txt."""
+    """[name, base, end, build id] rows of dump/nro/bases.txt."""
     if not os.path.exists(path):
         return []
     with open(path) as f:
         return [l.split() for l in f if len(l.split()) == 4]
 
 
-def registry():
-    """build id -> (name, base, end) of every NRO any tree has placed."""
-    reg = {}
-    if os.path.exists(REGISTRY):
-        with open(REGISTRY) as f:
-            for line in f:
-                p = line.split()
-                if len(p) == 4 and not line.startswith("#"):
-                    reg[p[0]] = (p[1], int(p[2], 16), int(p[3], 16))
-    added = False
-    for t in trees():
-        for name, base, end, bid in read_bases(os.path.join(t, "dump", "nro", "bases.txt")):
-            if bid not in reg:
-                reg[bid] = (name, int(base, 16), int(end, 16))
-                added = True
-    if added or not os.path.exists(REGISTRY):
-        write_registry(reg)
-    return reg
-
-
-def write_registry(reg):
-    rows = sorted(reg.items(), key=lambda kv: (kv[1][1], kv[0]))
-    replace_file(REGISTRY, "# NRO load addresses by build id, shared by every game version tree (tools/modcache.py):\n"
-                 "# <build id> <name> <base> <end>\n"
-                 + "".join(f"{bid} {n} {b:x} {e:x}\n" for bid, (n, b, e) in rows))
-
-
 def slots(base, end):
     return set(range(base // SLOT, (end - 1) // SLOT + 1))
 
 
-def place(build_id, name, size, rows):
-    """(name, base, reused) for a new NRO in a tree whose NROs are `rows` (bases.txt rows):
-    the address it has in the other trees if it is free here, else a new one."""
-    reg = registry()
+def place(name, size, rows):
+    """The base for a new NRO among this folder's NROs (`rows`: bases.txt rows): past all of
+    them, else the first free slots."""
     used = set()
     for r in rows:
         used |= slots(int(r[1], 16), int(r[2], 16))
-    known = reg.get(build_id)
-    if known and not slots(known[1], known[1] + size) & used:
-        return known[0], known[1], True
-    top = max([NRO_BASE] + [e for _n, _b, e in reg.values()] + [int(r[2], 16) for r in rows])
+    top = max([NRO_BASE] + [int(r[2], 16) for r in rows])
     base = (top + SLOT - 1) // SLOT * SLOT
-    if base + size > NRO_LIMIT:   # the shared space is used up: any slots this tree has free
+    if base + size > NRO_LIMIT:
         base = next((b for b in range(NRO_BASE, NRO_LIMIT - size + 1, SLOT) if not slots(b, b + size) & used), None)
         if base is None:
-            raise SystemExit(f"no room left for {name} ({size:,} bytes) among this tree's modules")
-    if not known:
-        reg[build_id] = (name, base, base + size)
-        write_registry(reg)
-    return name, base, False
+            raise SystemExit(f"no room left for {name} ({size:,} bytes) among the game's modules")
+    return base
 
 
 # ---- module build dirs ---------------------------------------------------------------
@@ -174,60 +103,6 @@ def clear_stamp(d):
         os.remove(os.path.join(d, "module.txt"))
     except OSError:
         pass
-
-
-def module_dirs(tree):
-    b = os.path.join(tree, "build")
-    out = [os.path.join(b, n) for n in FIXED]
-    nro = os.path.join(b, "nro")
-    if os.path.isdir(nro):
-        out += [os.path.join(nro, n) for n in sorted(os.listdir(nro))]
-    return [d for d in out if os.path.isdir(d)]
-
-
-_built = None
-
-
-def find_built(build_id, base, skip, fp):
-    """Another tree's build dir of the module with this build id at this base, or None: one
-    generated with the same tools first, then one with its objects, else the most recently
-    generated. A dir counts once it is complete: compiled (g_module.obj), or on macOS
-    (ADOPT_C_ONLY) also stamped with only its C (module.txt, from a build that compiles it
-    elsewhere)."""
-    global _built
-    if _built is None:
-        _built = {}
-        for t in trees():
-            for d in module_dirs(t):
-                info = build_info(d)
-                manifest = os.path.join(d, "manifest.tsv")
-                compiled = os.path.exists(os.path.join(d, "g_module.obj"))
-                c_only = ADOPT_C_ONLY and os.path.exists(os.path.join(d, "module.txt"))
-                if info and os.path.exists(manifest) and (compiled or c_only):
-                    _built.setdefault((info[0], info[1]), []).append((info[3] == fp, compiled, os.path.getmtime(manifest), d))
-    found = [c for c in _built.get((build_id, base), []) if not same_path(c[3], skip)]
-    return max(found)[3] if found else None
-
-
-def adopt(src, dst):
-    """Fill module build dir `dst` with `src`'s files (hard links, else copies). Returns how
-    many were linked and copied."""
-    os.makedirs(dst, exist_ok=True)
-    for n in os.listdir(dst):   # whatever another module left here
-        if n.endswith((".c", ".obj", ".tsv", ".txt", ".tmp")):
-            os.remove(os.path.join(dst, n))
-    linked = copied = 0
-    for n in os.listdir(src):
-        if not n.endswith((".c", ".obj", ".tsv", ".txt")) or n.startswith("._"):   # (not macOS's ._* files on exFAT)
-            continue
-        s, d = os.path.join(src, n), os.path.join(dst, n)
-        try:
-            os.link(s, d)
-            linked += 1
-        except OSError:
-            shutil.copy2(s, d)
-            copied += 1
-    return linked, copied
 
 
 # ---- imports ---------------------------------------------------------------------------

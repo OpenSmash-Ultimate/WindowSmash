@@ -1,6 +1,7 @@
-"""An update that reuses the original release's hashes for blocks the same as in that release:
-update.py opens it and checks those blocks through the hash tree's levels above. Made-up hash
-trees with 64-byte blocks (the game's are 16 KB); no game files."""
+"""update.py's hash tree: every block of the updated image checked against the hash the update
+carries for it; an update that takes some of its hashes from the original release (13.0.5 never
+does) is not 13.0.5's, and is refused. Made-up hash trees with 64-byte blocks (the game's are
+16 KB); no game files."""
 from pathlib import Path
 import hashlib
 import struct
@@ -41,53 +42,12 @@ def digests(l6, corrupt=()):
     return b''.join(sha(l6[b * BS:(b + 1) * BS] if b not in corrupt else b'x' * BS) for b in range(BLOCKS))
 
 
-class Tree:
-    """The parts of update.Patch that tree_check reads; `reused` = {hash level index (0 = level 1):
-    entries the update has the original release's for}."""
-
-    def __init__(self, reused):
-        self.lv, self.master = ivfc(data())
-        self.levels, off = [], 0
-        for level in self.lv:
-            self.levels.append((off, len(level), BLOG))
-            off += len(level)
-        self.block, self.blocks, self.reused = BS, BLOCKS, reused
-        self.hashes, self.known = self.hash_level(4)
-
-    def hash_level(self, i):
-        out, known = bytearray(self.lv[i]), bytearray(b'\x01') * (len(self.lv[i]) // 32)
-        for e in self.reused.get(i, ()):
-            out[e * 32:e * 32 + 32], known[e] = bytes(32), 0
-        return bytes(out), known
-
-
-class TreeCheckTests(unittest.TestCase):
-    def test_all_hashes_carried(self):
-        t = Tree({})
-        self.assertEqual(update.tree_check(t, digests(data())), [])
-        self.assertEqual(update.tree_check(t, digests(data(), corrupt={3})), [3])
-
-    def test_level_5_reused_checked_at_level_4(self):
-        t = Tree({4: range(4, 12)})
-        self.assertEqual(t.known[4], 0)
-        self.assertEqual(update.tree_check(t, digests(data())), [])
-        # block 5's hash shares a level-5 block with block 4's: level 4 tells only that one is wrong
-        self.assertEqual(update.tree_check(t, digests(data(), corrupt={5})), [4, 5])
-        self.assertEqual(update.tree_check(t, digests(data(), corrupt={11})), [10, 11])
-
-    def test_reused_on_two_levels_checked_at_level_3(self):
-        t = Tree({4: range(4, 8), 3: (2, 3)})   # level 4's entries 2 and 3 are the hashes of 4-5 and 6-7
-        self.assertEqual(update.tree_check(t, digests(data())), [])
-        self.assertEqual(update.tree_check(t, digests(data(), corrupt={6})), [4, 5, 6, 7])
-
-    def test_a_wrong_carried_block_does_not_take_its_neighbour_along(self):
-        t = Tree({4: (4,)})
-        self.assertEqual(update.tree_check(t, digests(data(), corrupt={5})), [5])   # 4 still confirmed
-
-    def test_reused_up_to_level_1_checked_against_the_master_hash(self):
-        t = Tree({4: range(BLOCKS), 3: range(8), 2: range(4), 1: range(2), 0: (0,)})
-        self.assertEqual(update.tree_check(t, digests(data())), [])
-        self.assertEqual(update.tree_check(t, digests(data(), corrupt={9})), list(range(BLOCKS)))
+class UnconfirmedTests(unittest.TestCase):
+    def test_every_block_against_its_hash(self):
+        levels, _master = ivfc(data())
+        patch = types.SimpleNamespace(hashes=levels[4], blocks=BLOCKS)
+        self.assertEqual(update.unconfirmed(patch, digests(data())), [])
+        self.assertEqual(update.unconfirmed(patch, digests(data(), corrupt={3, 9})), [3, 9])
 
 
 def patch_section(reused):
@@ -132,28 +92,24 @@ def patch_section(reused):
     return nca, offs
 
 
-class ReusedHashesTests(unittest.TestCase):
+class OpenTests(unittest.TestCase):
     def open(self, reused_entries):
         l5 = sum(len(level) for level in ivfc(data())[0][:4])
         nca, _offs = patch_section([(l5 + a * 32, l5 + z * 32) for a, z in reused_entries])
         with mock.patch.object(update, 'nsp_ncas', lambda nsp, keydir: [('update.nca', nca)]):
             return update.Patch('update.nsp', 'keys')
 
-    def test_update_opens_and_its_blocks_are_checked(self):
-        """The user's case: level 5 is partly the original release's (main stopped with "bytes at
-        ... come from the original release")."""
-        p = self.open([(4, 12)])
-        self.assertEqual([b for b in range(BLOCKS) if p.block_hash(b) is None], list(range(4, 12)))
+    def test_an_update_with_all_its_hashes(self):
+        p = self.open([])
         self.assertEqual(p.block_hash(3), sha(data()[3 * BS:4 * BS]))
-        self.assertEqual(update.tree_check(p, digests(data())), [])
-        self.assertEqual(update.tree_check(p, digests(data(), corrupt={7})), [6, 7])
-        self.assertEqual(update.tree_check(p, digests(data(), corrupt={2})), [2])
+        self.assertEqual(update.unconfirmed(p, digests(data(), corrupt={7})), [7])
 
-    def test_a_block_without_its_own_hash_decides_nothing(self):
-        p = self.open([(4, 12)])
-        b = object.__new__(update.Builder)
-        b.p = p
-        self.assertIsNone(b.ok(5, {}))   # (first_pass skips it; verify checks it through level 4)
+    def test_an_update_reusing_hashes_is_not_13_0_5(self):
+        """(What a player's other update did: level 5 partly the original release's.)"""
+        with self.assertRaises(SystemExit) as e:
+            self.open([(4, 12)])
+        self.assertIn('WindowSmash needs version 13.0.5 of the game, and this update takes some of its hashes from '
+                      'the original release', str(e.exception.code))
 
 
 if __name__ == '__main__':

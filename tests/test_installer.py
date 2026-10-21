@@ -100,6 +100,7 @@ class InstallerDecisionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix='installer-test-') as tmp:
             Path(tmp, 'setup.exe').write_bytes(b'')
             script = (f"$VsInstallerDir = '{tmp}'; $global:n = 0; "
+                      "function Install-PortableCompiler { 'failed' }; "   # (the download route first; it failed)
                       "function Test-Compiler { $global:n++; @{ Ok = ($global:n -gt 1); Output = 'clang-cl: ok' } }; "
                       f"function Get-VsInstances {{ @{{ Path = '{path}'; Product = 'Microsoft.VisualStudio.Product.Community' }} }}; "
                       "function Start-Process { param($FilePath, $ArgumentList, $Verb, [switch]$Wait, [switch]$PassThru) "
@@ -252,10 +253,14 @@ class InstallerDecisionTests(unittest.TestCase):
         self.assertEqual(got['c'], ['-NoUpdate'])
 
     def test_compiler_step_without_clang(self):
-        # (the first run on a PC without the compiler: no Visual Studio, one edition, two editions, no winget)
+        # (the first run on a PC without the compiler: no Visual Studio, one edition, two editions, no winget;
+        # the dry run says the download route comes first, with msvc_deps.py plan's lines, then the Build Tools)
         with tempfile.TemporaryDirectory(prefix='installer-test-') as tmp:
             Path(tmp, 'setup.exe').write_bytes(b'')
             mocks = (f"$DryRun = $true; $VsInstallerDir = '{tmp}'; "
+                     "function Get-PythonOutput { param([string[]]$Arguments) $global:planned = ($Arguments -join ' '); "
+                     "  @{ Output = ('LLVM 23.1.3 from GitHub: https://x/llvm.tar.zst' + [char]10 + "
+                     "'  only after you accept Microsoft''s license terms: https://x/license'); Code = 0 } }; "
                      "function Test-Compiler { @{ Ok = $false; Output = 'ERROR: clang-cl.exe was not found' } }; ")
             winget = "function Get-Command { [pscustomobject]@{ Source = 'C:\\winget.exe' } }; "
             one = "@{ Path = 'C:\\VS\\BuildTools'; Product = 'Microsoft.VisualStudio.Product.BuildTools' }"
@@ -267,11 +272,49 @@ class InstallerDecisionTests(unittest.TestCase):
                 'no winget': ("function Get-Command { $null }; function Get-VsInstances { }; ", 'visual-cpp-build-tools'),
             }
             for name, (setup, want) in cases.items():
-                out = ps_text(mocks + setup + "try { Step-Compiler } catch { 'STOPPED: ' + $_.Exception.Message }")
+                out = ps_text(mocks + setup + "try { Step-Compiler } catch { 'STOPPED: ' + $_.Exception.Message }; 'PLAN: ' + $global:planned")
                 self.assertIn(want, out, name)
                 self.assertNotIn("property 'Count' cannot be found", out, name)
+                self.assertIn('would run tools\\msvc_deps.py install', out, name)
+                self.assertIn("only after you accept Microsoft's license terms: https://x/license", out, name)
+                self.assertIn('msvc_deps.py plan', out, name)
+                self.assertLess(out.index('msvc_deps.py install'), out.index(want), name)   # that route first
                 if name != 'no winget':
                     self.assertNotIn('STOPPED', out, name)
+            out = ps_text(mocks + cases['none'][0] + "$BuildTools = $true; Step-Compiler")   # -BuildTools: straight to them
+            self.assertNotIn('msvc_deps', out)
+            self.assertIn('would run: winget install --id Microsoft.VisualStudio.BuildTools', out)
+
+    def test_compiler_step_download_route(self):
+        # the download route's outcomes: it works; declined (stops: the Build Tools are under the same
+        # license); it fails, or works but the check after it does not (removed): the Build Tools next
+        with tempfile.TemporaryDirectory(prefix='installer-test-') as tmp:
+            Path(tmp, 'setup.exe').write_bytes(b'')
+            mocks = (f"$VsInstallerDir = '{tmp}'; $global:n = 0; $global:removed = $false; $global:vs = $false; "
+                     "function Test-Compiler { $global:n++; if ($global:n -le $global:fails) { @{ Ok = $false; Output = 'ERROR: no compiler' } } "
+                     "  else { @{ Ok = $true; Output = ('  clang-cl: C:\\x\\clang-cl.exe' + [char]10 + '  toolchain: deps\\llvm (LLVM 23.1.3) with deps\\msvc') } } }; "
+                     "function Install-PortableCompiler { $global:how }; "
+                     "function Remove-PortableCompiler { $global:removed = $true }; "
+                     "function Get-VsInstances { @{ Path = 'C:\\VS\\BuildTools'; Product = 'Microsoft.VisualStudio.Product.BuildTools' } }; "
+                     "function Start-Process { param($FilePath, $ArgumentList, $Verb, [switch]$Wait, [switch]$PassThru) "
+                     "  $global:vs = $true; [pscustomobject]@{ ExitCode = 0 } }; ")
+            report = "; 'REMOVED: ' + $global:removed; 'VS: ' + $global:vs; 'CHECKS: ' + $global:n"
+            out = ps_text(mocks + "$global:how = 'done'; $global:fails = 1; Step-Compiler" + report)
+            self.assertIn('toolchain: deps\\llvm (LLVM 23.1.3)', out)
+            self.assertIn('VS: False', out)
+            self.assertIn('CHECKS: 2', out)
+            out = ps_text(mocks + "$global:how = 'declined'; $global:fails = 1; try { Step-Compiler } catch { 'STOPPED: ' + $_.Exception.Message }" + report)
+            self.assertIn("STOPPED: Microsoft's license terms were not accepted", out)
+            self.assertIn('VS: False', out)
+            out = ps_text(mocks + "$global:how = 'failed'; $global:fails = 1; Step-Compiler" + report)
+            self.assertIn('installing the Visual Studio Build Tools instead', out)
+            self.assertIn('VS: True', out)
+            self.assertIn('REMOVED: False', out)
+            out = ps_text(mocks + "$global:how = 'done'; $global:fails = 2; Step-Compiler" + report)
+            self.assertIn('the downloaded compiler did not pass the check', out)
+            self.assertIn('REMOVED: True', out)
+            self.assertIn('VS: True', out)
+            self.assertIn('CHECKS: 3', out)
 
     def test_zstd_check_before_python_314(self):
         # Python 3.13 and older have no compression package: asking for compression.zstd raised

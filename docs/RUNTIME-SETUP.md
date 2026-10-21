@@ -17,7 +17,7 @@ A package contains no game data, firmware fonts, keys, DLC list, save, debug map
 
 - A Windows 10 or 11 PC, 64-bit, with a processor that has AVX2, FMA and F16C ([which ones](BUILDING.md#step-1-check-your-pc)).
 - A graphics card or chip with DirectX 11 and a working driver.
-- Your own copy of the game's data at **the game version the package was built for** (the release says which): patched with that update and unencrypted, usually as `romfs.bin`. [Part 2 of the setup guide](BUILDING.md#part-2-gather-your-game-files) explains what that means.
+- Your own copy of the game's data at **version 13.0.5**, the version every package is built for: with the 13.0.5 update applied and unencrypted, usually as `romfs.bin`. [Part 2 of the setup guide](BUILDING.md#part-2-gather-your-game-files) explains what that means.
 - The six firmware font files (`.bfttf`). If you only have your firmware's `.nca` files, [step 9 of the setup guide](BUILDING.md#step-9-take-the-fonts-out-of-your-firmware) takes the fonts out; it needs Python and the WindowSmash source.
 - A folder you can write to, such as `C:\WindowSmash` (not `Program Files`).
 
@@ -60,7 +60,7 @@ The package contains no `romfs.cfg`, fonts, save or multiplayer identity, so you
 ## After setup
 
 - **Controls, controllers and the window:** the [playing guide](PLAYING.md). Pads other than Xbox controllers need `SDL3.dll` next to `build\ssbu.exe`; a package that includes it also includes its license, `SDL3-LICENSE.txt`.
-- **Multiplayer:** every player needs the same package release and the same game version. See the [multiplayer guide](MULTIPLAYER.md).
+- **Multiplayer:** every player needs the same package release. Every package is built from game version 13.0.5, as every WindowSmash is. See the [multiplayer guide](MULTIPLAYER.md).
 - **Unlocking fighters:** after the first start, close the game and double-click `Unlock All Fighters.bat` ([DLC and unlocks](DLC-AND-UNLOCKS.md#unlock-every-base-game-fighter)).
 - **Shaders:** shaders are prepared as you play, so a new effect can stutter once. `Prepare Shaders.bat` needs Python and Visual Studio, as for [building](BUILDING.md#step-16-optional-prepare-the-shaders).
 - **Problems:** the log is `build\play.log`, and crashes or freezes write a report into `reports\` ([problem reports](PLAYING.md#problem-reports)).

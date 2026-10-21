@@ -42,9 +42,11 @@ static HWND window;
 static id<MTLDevice> dev;
 static id<MTLCommandQueue> queue;
 static CAMetalLayer *layer;
-/* The game's picture at its own size, before it is fitted into the window (screenshots read it). */
-static id<MTLTexture> final_tex;
-enum { FINAL_W = 1920, FINAL_H = 1080 };
+/* The game's picture at its own size (1920x1080 times the render scale), before it is fitted
+ * into the window (screenshots read it): its bytes as the game's framebuffer has them (sRGB), read
+ * plainly (final_tex) or as sRGB (final_srgb: shrinking it averages in linear light). */
+static id<MTLTexture> final_tex, final_srgb;
+static u32 final_w, final_h;
 static id<MTLLibrary> builtin;            /* the renderer's own shaders (BUILTIN_MSL) */
 static id<MTLSamplerState> linear_sampler, point_sampler;
 static CRITICAL_SECTION lock;
@@ -74,7 +76,7 @@ static volatile u64 completed_serial;
 static u32 cmd_draws;
 static u64 cmd_bytes;
 u64 gfx_stat_commits;
-/* The open render pass: its targets, and their size (the smallest's). */
+/* The open render pass: its targets, and their size (the smallest's, on the host: render scale included). */
 static struct { Surface *color[8]; id<MTLTexture> view[8]; Surface *depth; id<MTLTexture> scratch; u32 w, h; } pass;
 static void forget_draw_state(void);
 static NSMutableArray *gpu_times_cmds;    /* (SSBU_GPU_TIMES: the command buffers of the frame being timed) */
@@ -412,9 +414,17 @@ static void gpu_write(GBuf *dst, u64 off, const void *data, u32 n) {
 }
 
 /* ---- surfaces: render targets on the host ------------------------------------------------- */
+/* Render scale (display.ini render_scale): every render target is made this many times the
+ * game's size in each direction, and the draw state given in the game's pixels (viewports,
+ * scissors, blits, the fragment position) is scaled to match. 1 = the game's own size. Fixed at
+ * the device's start (see init; gfxtest changes it for the targets it makes next). */
+static float render_scale = 1.0f;
+
 struct Surface {
     u64 guest;
-    u32 width, height, format, depth;
+    u32 width, height, format, depth;      /* the game's size: what the surface is known and matched by */
+    u32 hw, hh;                            /* the host texture's size (the game's, scaled) */
+    float sx, sy;                          /* hw / width, hh / height */
     MTLPixelFormat storage, view;          /* the texture's format, and how it is rendered to and sampled */
     id<MTLTexture> tex;
     id<MTLTexture> rtv;                    /* rendered to: tex, or a view of it as `view` */
@@ -591,6 +601,41 @@ static void make_views(Surface *s, MTLPixelFormat view) {
     for (u32 o = 0; o < 2; o++) s->srv[o][0] = s->srv[o][1] = nil;
 }
 
+/* SSBU_SCALE_SKIP (testing): render targets kept at the game's size whatever the render scale,
+ * to find which one a scaling artifact comes from. A list of WxH sizes, and/or "square" for the
+ * power-of-two squares (shadow maps), e.g. "square,960x540". */
+static int scale_skipped(u32 w, u32 h) {
+    static int loaded;
+    static u32 sizes[32][2], nsizes, squares;
+    if (!loaded) {
+        const char *e = getenv("SSBU_SCALE_SKIP");
+        for (const char *p = e; p && *p;) {
+            u32 a, b;
+            if (!_strnicmp(p, "square", 6)) squares = 1;
+            else if (sscanf(p, "%ux%u", &a, &b) == 2 && nsizes < 32) { sizes[nsizes][0] = a; sizes[nsizes][1] = b; nsizes++; }
+            p = strchr(p, ',');
+            if (p) p++;
+        }
+        loaded = 1;
+    }
+    if (squares && w == h && !(w & (w - 1))) return 1;
+    for (u32 i = 0; i < nsizes; i++) if (sizes[i][0] == w && sizes[i][1] == h) return 1;
+    return 0;
+}
+
+/* The host size of a w x h render target. It depends on the game's size only (never the format
+ * or depth), so a colour target and the depth target drawn with it always match. A target too
+ * big to scale stays at the game's size. */
+static void scaled_size(u32 w, u32 h, u32 *hw, u32 *hh) {
+    *hw = w; *hh = h;
+    if (render_scale == 1.0f || scale_skipped(w, h)) return;
+    float x = (float)w * render_scale + 0.5f, y = (float)h * render_scale + 0.5f;
+    if (x < 1) x = 1;
+    if (y < 1) y = 1;
+    if (x > 16384 || y > 16384) return;
+    *hw = (u32)x; *hh = (u32)y;
+}
+
 /* The host texture standing for the render target at `guest`, created on first use (cleared to
  * zeros, as Direct3D's new textures are). */
 static Surface *surface(u64 guest, u32 width, u32 height, u32 format, int depth) {
@@ -629,7 +674,9 @@ static Surface *surface(u64 guest, u32 width, u32 height, u32 format, int depth)
             release_surface(s);
         }
     }
-    MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:storage width:width height:height mipmapped:NO];
+    u32 hw, hh;
+    scaled_size(width, height, &hw, &hh);
+    MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:storage width:hw height:hh mipmapped:NO];
     td.storageMode = MTLStorageModePrivate;
     td.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead | MTLTextureUsagePixelFormatView;
     id<MTLTexture> tex = [dev newTextureWithDescriptor:td];
@@ -642,6 +689,8 @@ static Surface *surface(u64 guest, u32 width, u32 height, u32 format, int depth)
     s->stencil = stencil;
     make_views(s, view);
     s->guest = guest; s->width = width; s->height = height; s->format = format;
+    s->hw = hw; s->hh = hh;
+    s->sx = (float)hw / (float)width; s->sy = (float)hh / (float)height;
     s->clear = depth ? 2 | (stencil ? 4 : 0) : 1;   /* (zeros, all of it) */
     s->used = ++tick;
     return s;
@@ -674,8 +723,8 @@ static id<MTLRenderCommandEncoder> render_pass(const Targets *t) {
         a.clearColor = MTLClearColorMake(s->clear_color[0], s->clear_color[1], s->clear_color[2], s->clear_color[3]);
         a.storeAction = MTLStoreActionStore;
         s->clear = 0;
-        if (s->width < w) w = s->width;
-        if (s->height < h) h = s->height;
+        if (s->hw < w) w = s->hw;
+        if (s->hh < h) h = s->hh;
         pass.color[i] = s;
         pass.view[i] = s->rtv;
     }
@@ -692,8 +741,8 @@ static id<MTLRenderCommandEncoder> render_pass(const Targets *t) {
             rp.stencilAttachment.storeAction = MTLStoreActionStore;
         }
         s->clear = 0;
-        if (s->width < w) w = s->width;
-        if (s->height < h) h = s->height;
+        if (s->hw < w) w = s->hw;
+        if (s->hh < h) h = s->hh;
         pass.depth = s;
     }
     if (t->scratch_depth && !t->depth) {   /* (a pixel shader that writes depth needs a depth target: one that is never kept) */
@@ -771,6 +820,7 @@ static void leave(void) {
 }
 
 static float f32_of(u32 bits) { float f; memcpy(&f, &bits, 4); return f; }
+static u32 f32_bits(float f) { u32 u; memcpy(&u, &f, 4); return u; }
 
 /* The options every shader is compiled with: Metal's fast math breaks the translator's NaN-aware
  * compares, and positions are invariant (the same position from different programs is the same,
@@ -1270,6 +1320,8 @@ static void enqueue(Job *j, int q, int front) {
  * dispatch waits for it. */
 static void enqueue_shader(Shader *s) { enqueue(&s->job, s->cached ? 0 : 1, s->cached && s->stage == SHADER_COMPUTE); }
 
+void gfx_status_lines(void) {}   /* (no lines of its own yet) */
+
 /* For a crash or freeze report: what each compiler thread is doing (to line, a line at a time),
  * its program kept next to the disk cache (shadercrash/) so it can be compiled again outside the
  * game. */
@@ -1398,7 +1450,8 @@ static Shader *find_shader_ex(u64 g, int stage, u32 vs_outputs, const CbBinding 
     u32 size = shader_size(p, 0x40000), skip = stage == SHADER_COMPUTE ? 0x50 : 0;
     u64 h = shader_program_hash(p + skip, size - skip);
     if (stage == SHADER_COMPUTE) h = (h ^ ((u64)local[0] | (u64)local[1] << 16 | (u64)local[2] << 32 | (u64)shared << 40)) * 1099511628211ull;
-    u64 program_hash = h;
+    u64 program_hash = h;   /* (the shader's name) */
+    h = shader_cache_hash(h, p, size, stage);   /* (the few programs the render scale changes: files of their own) */
     /* (gpu_d3d11.c's salt: it changes with the alpha test's code, so cache files of an older form are not used) */
     if (alpha_tested) h = (h ^ 0x616C706861743032ull) * 1099511628211ull;
     CbufSource src = {stage_cb};
@@ -3036,6 +3089,11 @@ static void bind_resources(const u32 *regs, const CbBinding cb[STAGES][18], int 
          * the shader above the swizzle's 12 bits, for the translator to apply (its swizzle reads
          * only those 12) */
         if (!sampler_lod_bias()) params->swz[stage][k] |= ((tsc[1] >> 12) & 0x1FFF) << 12;
+        /* a render target's render scale, 4.12 fixed point (0: 1), for the few programs that step
+         * in texels (gpu_shader.c: tsc_) - in a storage buffer descriptor's spare fourth word, two
+         * textures' a word, the swizzle word's bits being the LOD bias's */
+        Surface *rt = out->tex[k].surface;
+        if (rt && rt->sx != 1.0f) params->sb[stage][k >> 1][3] |= (u32)(rt->sx * 4096.0f + 0.5f) << ((k & 1) * 16);
         if (draw_logging) {
             TextureDesc d;
             int ok = tic_decode(tic, &d);
@@ -3257,17 +3315,18 @@ void gfx_draw(const u32 *regs, const CbBinding cb[STAGES][18], int indexed) {
     /* render targets */
     Targets tg = {{0}, NULL, 0};
     u32 sel = regs[M_CT_SELECT], count = sel & 15, rt_w = 0, rt_h = 0;
+    float rt_sx = 1.0f, rt_sy = 1.0f;   /* the targets' render scale: host pixels per game pixel */
     for (u32 i = 0; i < count && i < 8; i++) {
         u32 ct = (sel >> (4 + 3 * i)) & 7;
         u64 va = (u64)regs[M_CT(ct)] << 32 | regs[M_CT(ct) + 1];
         if (!va || !regs[M_CT(ct) + 4]) continue;
         Surface *sf = surface(gpu_va_to_guest(va), regs[M_CT(ct) + 2], regs[M_CT(ct) + 3], regs[M_CT(ct) + 4], 0);
-        if (sf) { tg.color[i] = sf; if (!rt_w) { rt_w = sf->width; rt_h = sf->height; } }
+        if (sf) { tg.color[i] = sf; if (!rt_w) { rt_w = sf->width; rt_h = sf->height; rt_sx = sf->sx; rt_sy = sf->sy; } }
     }
     if (regs[M_ZT_SELECT] & 1) {
         u64 va = (u64)regs[M_ZT_A] << 32 | regs[M_ZT_A + 1];
         Surface *sf = surface(gpu_va_to_guest(va), regs[M_ZT_SIZE], regs[M_ZT_SIZE + 1], regs[M_ZT_A + 2], 1);
-        if (sf) { tg.depth = sf; if (!rt_w) { rt_w = sf->width; rt_h = sf->height; } }
+        if (sf) { tg.depth = sf; if (!rt_w) { rt_w = sf->width; rt_h = sf->height; rt_sx = sf->sx; rt_sy = sf->sy; } }
     }
     if (!rt_w) { gfx_stat_skipped++; gfx_skip_target++; leave(); return; }
     tg.scratch_depth = !tg.depth && ps_used && ps_used->info.writes_depth;
@@ -3291,6 +3350,9 @@ void gfx_draw(const u32 *regs, const CbBinding cb[STAGES][18], int indexed) {
     MTLViewport vp = {ox - fabsf(sx), oy - fabsf(sy), 2 * fabsf(sx), 2 * fabsf(sy), zmin, zmax};
     if (vp.width < 1) { vp.originX = 0; vp.width = rt_w; }
     if (vp.height < 1) { vp.originY = 0; vp.height = rt_h; }
+    /* (worked out in the game's pixels, then in the targets' own) */
+    vp.originX *= rt_sx; vp.width *= rt_sx;
+    vp.originY *= rt_sy; vp.height *= rt_sy;
     params.fix[0] = sx < 0 ? -1.0f : 1.0f;
     params.fix[1] = sy < 0 ? 1.0f : -1.0f;
     params.fix[2] = minus_one ? 0.5f : 1.0f;
@@ -3310,6 +3372,10 @@ void gfx_draw(const u32 *regs, const CbBinding cb[STAGES][18], int indexed) {
         u32 h = regs[M_SCISSOR(0) + 1], v = regs[M_SCISSOR(0) + 2];
         sc[0] = (i32)(h & 0xFFFF); sc[1] = (i32)(v & 0xFFFF); sc[2] = (i32)(h >> 16); sc[3] = (i32)(v >> 16);
         if (lower_left) { i32 t = (i32)rt_h - sc[3]; sc[3] = (i32)rt_h - sc[1]; sc[1] = t; }
+        /* scaled outwards: at a fractional scale neighbouring rectangles overlap by a pixel
+         * rather than leaving a gap between them */
+        sc[0] = (i32)floorf((float)sc[0] * rt_sx); sc[1] = (i32)floorf((float)sc[1] * rt_sy);
+        sc[2] = (i32)ceilf((float)sc[2] * rt_sx); sc[3] = (i32)ceilf((float)sc[3] * rt_sy);
     }
 
     /* rasterizer, depth/stencil, blending */
@@ -3489,9 +3555,9 @@ void gfx_draw(const u32 *regs, const CbBinding cb[STAGES][18], int indexed) {
     }
     params.base[0] = regs[M_GLOBAL_BASE_VERTEX];
     params.base[1] = regs[M_GLOBAL_BASE_INSTANCE] + instance_counter;
-    /* 1 / the render scale (a float's bits): the fragment position is the game's pixel (the
-     * translator's ps_input). This renderer draws at the game's own size: 1. */
-    params.base[2] = params.base[3] = 0x3F800000u;
+    /* the fragment position in the game's pixels: [[position]] times these (gpu_shader.c ps_input) */
+    params.base[2] = f32_bits(1.0f / rt_sx);
+    params.base[3] = f32_bits(1.0f / rt_sy);
 
     bind_resources(regs, cb, SHADER_VERTEX, vs, &params, vbind);
     if (ps) bind_resources(regs, cb, SHADER_PIXEL, ps, &params, pbind);
@@ -3587,6 +3653,16 @@ static const char BUILTIN_MSL[] =
     "  return as_type<uint4>(blit2d(i, t, s, r)); }\n"
     "fragment int4 ps2d_i(V i [[stage_in]], texture2d<float> t [[texture(0)]], sampler s [[sampler(0)]], constant R &r [[buffer(0)]]) {\n"
     "  return as_type<int4>(blit2d(i, t, s, r)); }\n"
+    /* the picture shrunk into the window (render scale): each window pixel the average of the
+     * picture's pixels under it, n x n bilinear taps spread over its footprint - read through an
+     * sRGB view (averaged in linear light), written as sRGB values (the window's are) */
+    "struct D { float4 size; float4 taps; };\n"   /* picture w, h, 1/w, 1/h; taps x, y; footprint x, y */
+    "fragment float4 psdown(V i [[stage_in]], texture2d<float> t [[texture(0)]], sampler s [[sampler(0)]], constant D &d [[buffer(0)]]) {\n"
+    "  float2 c = i.uv * d.size.xy - d.taps.zw * 0.5f; float3 sum = 0.0f;\n"
+    "  for (int y = 0; y < int(d.taps.y); y++) for (int x = 0; x < int(d.taps.x); x++)\n"
+    "    sum += t.sample(s, (c + d.taps.zw * (float2(x, y) + 0.5f) / d.taps.xy) * d.size.zw, level(0)).rgb;\n"
+    "  float3 l = sum / (d.taps.x * d.taps.y);\n"
+    "  return float4(select(1.055f * powr(l, 1.0f / 2.4f) - 0.055f, l * 12.92f, l <= 0.0031308f), 1.0f); }\n"
     /* bytes from one buffer to another at any offsets (blits want whole words) */
     "struct C { uint from, to, n, pad; };\n"
     "kernel void copy_bytes(device const uchar *src [[buffer(0)]], device uchar *dst [[buffer(1)]], constant C &c [[buffer(2)]],\n"
@@ -3653,7 +3729,7 @@ static void clear_channels(Surface *s, const float color[4], u32 mask) {
     id<MTLRenderCommandEncoder> e = render_pass(&t);
     [e setFragmentBytes:color length:16 atIndex:0];
     draw_builtin(e, s->kind == 1 ? "psclear_u" : s->kind == 2 ? "psclear_i" : "psclear", s->view, write_mask(mask),
-                 (MTLViewport){0, 0, s->width, s->height, 0, 1});
+                 (MTLViewport){0, 0, s->hw, s->hh, 0, 1});
 }
 
 void gfx_clear(const u32 *regs, u32 arg) {
@@ -3788,7 +3864,7 @@ static void write_bmp(const char *path, const u8 *px, u32 w, u32 h) {
     fclose(f);
 }
 
-/* SSBU_CAPTURE=<dir>: save the window's contents there every few seconds (frame_N.bmp). */
+/* A texture's first level saved as a BMP (fn: as read_rgba8 takes it). */
 static void save_bmp(id<MTLTexture> tex, const char *fn, const char *path) {
     u32 w, h;
     u8 *px = read_rgba8(tex, fn, &w, &h);
@@ -3861,8 +3937,8 @@ static void note_sampled(Surface *s) {
     sampled_saved[nsampled_saved++].used = s->used;
     sampled_seq_of[nsampled_pending] = sampled_seq;
     sampled_pending[nsampled_pending++] = s;
-    fprintf(stderr, "[draw]   (samples render target %#llx %ux%u fmt %#x: saved as in_%03d)\n", s->guest, s->width, s->height,
-            s->format, sampled_seq++);
+    fprintf(stderr, "[draw]   (samples render target %#llx %ux%u fmt %#x: saved as in_%03d, %ux%u on the host)\n", s->guest, s->width,
+            s->height, s->format, sampled_seq++, s->hw, s->hh);
 }
 
 static void save_sampled(void) {
@@ -3880,11 +3956,15 @@ static void save_sampled(void) {
     nsampled_pending = 0;
 }
 
+/* SSBU_CAPTURE=<dir>: save the game's picture there every few seconds (frame_N.bmp); with
+ * SSBU_CAPTURE_WINDOW too, the window's picture as well, as fitted into it (window_N.bmp, saved
+ * by gfx_present once it is drawn: capture_window names it). */
+static char capture_window[1100];
 static void capture(void) {
     static const char *dir;
     static int checked, count;
     static u64 last;
-    static int most = 40;   /* SSBU_CAPTURE_MAX: how many (at 6 MB each) */
+    static int most = 40;   /* SSBU_CAPTURE_MAX: how many (6 MB each at 1920x1080, 4 times that at render scale 2) */
     static u64 every = 3000000000ull;   /* SSBU_CAPTURE_EVERY: seconds apart */
     if (!checked++) {
         dir = getenv("SSBU_CAPTURE");
@@ -3896,6 +3976,7 @@ static void capture(void) {
     char path[1024];
     snprintf(path, sizeof path, "%s/frame_%03d.bmp", dir, count);
     save_bmp(final_tex, NULL, path);
+    if (getenv("SSBU_CAPTURE_WINDOW")) snprintf(capture_window, sizeof capture_window, "%s/window_%03d.bmp", dir, count);
     if (getenv("SSBU_CAPTURE_SURFACES")) capture_surfaces(dir, count);
     count++;
 }
@@ -3920,15 +4001,15 @@ int gfx_metal_read_surface(u64 guest, int depth, void *out, u32 size, u32 *w, u3
         if (surfaces[i].tex && surfaces[i].guest == guest && surfaces[i].depth == (u32)!!depth && (!s || surfaces[i].used > s->used)) s = &surfaces[i];
     if (!s) { leave(); return 0; }
     settle(s);
-    u32 bpp = pixel_bytes(s->storage), row = s->width * bpp;
-    id<MTLBuffer> buf = [dev newBufferWithLength:(NSUInteger)row * s->height options:MTLResourceStorageModeShared];
+    u32 bpp = pixel_bytes(s->storage), row = s->hw * bpp;
+    id<MTLBuffer> buf = [dev newBufferWithLength:(NSUInteger)row * s->hh options:MTLResourceStorageModeShared];
     MTLBlitOption opt = s->storage == MTLPixelFormatDepth32Float_Stencil8 ? MTLBlitOptionDepthFromDepthStencil : MTLBlitOptionNone;
-    [blits() copyFromTexture:s->tex sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0, 0, 0) sourceSize:MTLSizeMake(s->width, s->height, 1)
-                    toBuffer:buf destinationOffset:0 destinationBytesPerRow:row destinationBytesPerImage:(NSUInteger)row * s->height options:opt];
+    [blits() copyFromTexture:s->tex sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0, 0, 0) sourceSize:MTLSizeMake(s->hw, s->hh, 1)
+                    toBuffer:buf destinationOffset:0 destinationBytesPerRow:row destinationBytesPerImage:(NSUInteger)row * s->hh options:opt];
     submit(1);
-    size_t n = (size_t)row * s->height;
+    size_t n = (size_t)row * s->hh;
     memcpy(out, buf.contents, n < size ? n : size);
-    *w = s->width; *h = s->height; *format = (u32)s->storage;
+    *w = s->hw; *h = s->hh; *format = (u32)s->storage;
     leave();
     return 1;
 }
@@ -3964,13 +4045,17 @@ void gfx_blit2d(const u32 *regs) {
     id<MTLTexture> in = src == dst ? dummy_texture(TEX_2D, 0) : surface_srv(src, is_srgb(dst->view), 0);   /* read as the destination writes: bytes unchanged */
     Targets t = {{dst}, NULL, 0};
     id<MTLRenderCommandEncoder> e = render_pass(&t);
-    /* each destination pixel samples the source at src0 + (pixel - dst0) * step, in source pixels */
-    float r[8] = {(float)sx, (float)sy, (float)du, (float)dv, (float)dx, (float)dy, 1.0f / (float)src->width, 1.0f / (float)src->height};
+    /* each destination pixel samples the source at src0 + (pixel - dst0) * step, in source pixels:
+     * the game's, whatever either surface's render scale (the shader works in the destination's
+     * host pixels, so dst0 and step are given in those, and the source is read normalized) */
+    float r[8] = {(float)sx, (float)sy, (float)(du / dst->sx), (float)(dv / dst->sy), (float)dx * dst->sx, (float)dy * dst->sy,
+                  1.0f / (float)src->width, 1.0f / (float)src->height};
     [e setFragmentBytes:r length:sizeof r atIndex:0];
     [e setFragmentTexture:in atIndex:0];
     [e setFragmentSamplerState:(regs[0x223] >> 4) & 1 ? linear_sampler : point_sampler atIndex:0];
+    /* (the rectangles are in the game's pixels; the destination's own are dst->sx, sy times those) */
     draw_builtin(e, dst->kind == 1 ? "ps2d_u" : dst->kind == 2 ? "ps2d_i" : "ps2d", dst->view, MTLColorWriteMaskAll,
-                 (MTLViewport){dx, dy, dw, dh, 0, 1});
+                 (MTLViewport){dx * dst->sx, dy * dst->sy, dw * dst->sx, dh * dst->sy, 0, 1});
     leave();
 }
 
@@ -4272,6 +4357,22 @@ static void gpu_timer_frame(void) {
 
 void watchdog_present(void);   /* debug_watchdog.c */
 
+/* The picture's texture at w x h (the presented surface's host size), made again when that
+ * changes: written and saved as the plain bytes, shrunk through its sRGB view. */
+static int make_final(u32 w, u32 h) {
+    if (final_tex && final_w == w && final_h == h) return 1;
+    MTLTextureDescriptor *fd = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:w height:h mipmapped:NO];
+    fd.storageMode = MTLStorageModePrivate;
+    fd.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead | MTLTextureUsagePixelFormatView;
+    id<MTLTexture> tex = [dev newTextureWithDescriptor:fd];
+    id<MTLTexture> srgb = tex ? [tex newTextureViewWithPixelFormat:MTLPixelFormatRGBA8Unorm_sRGB] : nil;
+    if (!srgb) return 0;
+    if (final_tex) { bury(final_tex); bury(final_srgb); }   /* (work recorded with them keeps them) */
+    final_tex = tex; final_srgb = srgb;
+    final_w = w; final_h = h;
+    return 1;
+}
+
 void gfx_present(u64 guest, u32 width, u32 height) {
     (void)width; (void)height;
     if (!enter()) return;
@@ -4320,10 +4421,11 @@ void gfx_present(u64 guest, u32 width, u32 height) {
     Surface *src = NULL;
     for (u32 i = 0; i < nsurfaces; i++)
         if (surfaces[i].tex && !surfaces[i].depth && surfaces[i].guest == guest) src = &surfaces[i];
-    /* the game's picture at its own size: the bytes as they are (the display shows them as sRGB,
-     * which an sRGB framebuffer's already are) */
+    /* the game's picture at its own size (render scale included): pixel for pixel, the bytes as
+     * they are (the display shows them as sRGB, which an sRGB framebuffer's already are) */
     settle(src);
     end_encoding();
+    if (src && (src->hw != final_w || src->hh != final_h)) make_final(src->hw, src->hh);
     MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
     rp.colorAttachments[0].texture = final_tex;
     rp.colorAttachments[0].loadAction = src ? MTLLoadActionDontCare : MTLLoadActionClear;
@@ -4331,11 +4433,11 @@ void gfx_present(u64 guest, u32 width, u32 height) {
     rp.colorAttachments[0].storeAction = MTLStoreActionStore;
     renc = [command() renderCommandEncoderWithDescriptor:rp];
     enc_serial++;
-    pass.w = FINAL_W; pass.h = FINAL_H;
+    pass.w = final_w; pass.h = final_h;
     if (src) {
         [renc setFragmentTexture:surface_srv(src, 0, 0) atIndex:0];
         [renc setFragmentSamplerState:linear_sampler atIndex:0];
-        draw_builtin(renc, "ps", MTLPixelFormatRGBA8Unorm, MTLColorWriteMaskAll, (MTLViewport){0, 0, FINAL_W, FINAL_H, 0, 1});
+        draw_builtin(renc, "ps", MTLPixelFormatRGBA8Unorm, MTLColorWriteMaskAll, (MTLViewport){0, 0, final_w, final_h, 0, 1});
     }
     end_encoding();
     capture();
@@ -4432,6 +4534,10 @@ void gfx_present(u64 guest, u32 width, u32 height) {
         snprintf(hint, sizeof hint, "F2 details  Esc settings%s%s%s%s", depth_sampling == 0 ? "  depth sampling OFF" : "",
                  profile_running() ? "  profiling..." : "", net[0] ? "\n" : "", net);
         if (net[0]) { size_t l = strlen(detail); snprintf(detail + l, sizeof detail - l, "\n%s", net); }
+        if (render_scale != 1.0f) {
+            size_t l = strlen(detail);
+            snprintf(detail + l, sizeof detail - l, "\nrender scale %.3g: picture %ux%u", render_scale, final_w, final_h);
+        }
         char pads[256];
         pad_describe(pads, sizeof pads);
         { size_t l = strlen(detail); snprintf(detail + l, sizeof detail - l, "\npads: %s", pads[0] ? pads : "none (keyboard only)"); }
@@ -4509,9 +4615,30 @@ void gfx_present(u64 guest, u32 width, u32 height) {
         renc = [command() renderCommandEncoderWithDescriptor:wp];
         enc_serial++;
         pass.w = (u32)back.width; pass.h = (u32)back.height;
-        [renc setFragmentTexture:final_tex atIndex:0];
-        [renc setFragmentSamplerState:linear_sampler atIndex:0];
-        draw_builtin(renc, "ps", back.pixelFormat, MTLColorWriteMaskAll, (MTLViewport){fit_x, fit_y, fit_w, fit_h, 0, 1});
+        MTLViewport fit = {fit_x, fit_y, fit_w, fit_h, 0, 1};
+        if (final_w > fit_w || final_h > fit_h) {
+            /* a picture bigger than its place (render scale): shrunk, each window pixel the average
+             * of the picture's under it, in linear light */
+            float rx = (float)final_w / (float)fit_w, ry = (float)final_h / (float)fit_h;
+            float k[8] = {(float)final_w, (float)final_h, 1.0f / (float)final_w, 1.0f / (float)final_h,
+                          ceilf(rx), ceilf(ry), rx, ry};   /* taps per axis; the footprint in picture pixels */
+            [renc setFragmentBytes:k length:sizeof k atIndex:0];
+            [renc setFragmentTexture:final_srgb atIndex:0];
+            [renc setFragmentSamplerState:linear_sampler atIndex:0];
+            draw_builtin(renc, "psdown", back.pixelFormat, MTLColorWriteMaskAll, fit);
+        } else {   /* as big as its place or smaller: drawn bilinear */
+            [renc setFragmentTexture:final_tex atIndex:0];
+            [renc setFragmentSamplerState:linear_sampler atIndex:0];
+            draw_builtin(renc, "ps", back.pixelFormat, MTLColorWriteMaskAll, fit);
+        }
+        if (capture_window[0]) {   /* (SSBU_CAPTURE_WINDOW: the window as the picture is fitted into it, before the overlay) */
+            end_encoding();
+            save_bmp(back, "ps", capture_window);
+            wp.colorAttachments[0].loadAction = MTLLoadActionLoad;
+            renc = [command() renderCommandEncoderWithDescriptor:wp];
+            enc_serial++;
+            pass.w = (u32)back.width; pass.h = (u32)back.height;
+        }
         overlay_present_metal(dev, renc, back.pixelFormat, fit_x, fit_y, fit_w, fit_h, overlay, details ? detail : hint);
         end_encoding();
         if (menu_shot) {   /* F3 with the settings menu open: the window as it is, menu and all (waits for the GPU) */
@@ -4526,6 +4653,7 @@ void gfx_present(u64 guest, u32 width, u32 height) {
         }
         [command() presentDrawable:drawable];
     }
+    capture_window[0] = 0;
     dispatch_semaphore_t free_ = frames_free;
     [command() addCompletedHandler:^(id<MTLCommandBuffer> b) {
         (void)b;
@@ -4536,6 +4664,12 @@ void gfx_present(u64 guest, u32 width, u32 height) {
     gpu_timer_frame();
     gpu_times_frame();
     submit(0);
+    leave();
+}
+
+void gfx_metal_set_render_scale(float scale) {
+    if (!enter()) return;
+    render_scale = scale;
     leave();
 }
 
@@ -4575,10 +4709,33 @@ static WINDOWS_BOOL CALLBACK init(PINIT_ONCE o, PVOID p, PVOID *c) {
         sd.minFilter = sd.magFilter = MTLSamplerMinMagFilterNearest;
         sd.mipFilter = MTLSamplerMipFilterNearest;
         point_sampler = [dev newSamplerStateWithDescriptor:sd];
-        MTLTextureDescriptor *fd = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm width:FINAL_W height:FINAL_H mipmapped:NO];
-        fd.storageMode = MTLStorageModePrivate;
-        fd.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
-        if (!(final_tex = [dev newTextureWithDescriptor:fd])) {
+        /* The render scale (display.ini render_scale; auto: the picture's height in the window as it
+         * is now - in full screen the screen's, which the window is on its way to - over the
+         * game's 1080), fixed from here on: render targets are made at it. */
+        float scale = display_render_scale();
+        if (scale == 0) {
+            scale = 1;
+            CGSize size = layer ? layer.drawableSize : CGSizeZero;
+            if (layer && display_window_mode() != DISPLAY_WINDOWED) {
+                CGDisplayModeRef mode = CGDisplayCopyDisplayMode(CGMainDisplayID());
+                if (mode) {
+                    size = CGSizeMake(CGDisplayModeGetPixelWidth(mode), CGDisplayModeGetPixelHeight(mode));
+                    CGDisplayModeRelease(mode);
+                }
+            }
+            if (size.width >= 1 && size.height >= 1) {
+                unsigned fx, fy, fw, fh;
+                display_fit((unsigned)size.width, (unsigned)size.height, &fx, &fy, &fw, &fh);
+                scale = (float)fh / 1080.0f;
+                if (scale < 1) scale = 1;
+                if (scale > 4) scale = 4;
+            }
+        }
+        if (scale < 0.5f || scale > 4) scale = 1;
+        render_scale = scale;
+        u32 pw, ph;
+        scaled_size(1920, 1080, &pw, &ph);
+        if (!make_final(pw, ph)) {
             fprintf(stderr, "[gfx] cannot create the picture's texture\n");
             return TRUE;
         }
@@ -4603,8 +4760,9 @@ static WINDOWS_BOOL CALLBACK init(PINIT_ONCE o, PVOID p, PVOID *c) {
         if (!prewarm || atoi(prewarm) != 0) CloseHandle(CreateThread(NULL, 0, prewarm_main, NULL, 0, NULL));
         ready = 1;
         fprintf(stderr, "[gfx] Metal ready on %s (%u-frame latency)\n", dev.name.UTF8String, latency);
-        if (display_render_scale() != 1.0f)   /* (display.ini's, or SSBU_RENDER_SCALE: Direct3D's renderer alone has it) */
-            fprintf(stderr, "[gfx] render_scale is not supported on a Mac yet: the game draws at its own 1920x1080\n");
+        if (render_scale != 1.0f)
+            fprintf(stderr, "[gfx] render scale %.3g%s: the game's 1920x1080 drawn at %ux%u\n", render_scale,
+                    display_render_scale() == 0 ? " (auto)" : "", pw, ph);
     }
     return TRUE;
 }

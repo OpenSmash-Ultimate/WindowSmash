@@ -12,8 +12,8 @@ WORK = Path(__file__).resolve().parent
 PS = Path(os.environ['SystemRoot']) / 'System32/WindowsPowerShell/v1.0/powershell.exe'
 SCRIPT = WORK.parent / 'tools/Unlock-All-Fighters.ps1'
 ORIGINAL = runpy.run_path(str(WORK.parent / 'tools/unlock_all.py'), run_name='unlock_reference')
-# The tools pick the save layout by the game version's main module; 11.0.0's build ID.
-BUILD_ID = '4A3F8ED7DCCE3AD4541A3A2F7622B5B57FC8A55C'
+# The tools check the game version by its main module: 13.0.5's build ID.
+BUILD_ID = '21450C647B8C5940ED5B68218EA128FD3C5D597D'
 _VERSION, SAVE_SIZE, FLAGS, RECORDS = ORIGINAL['LAYOUTS'][BUILD_ID]
 
 
@@ -48,7 +48,7 @@ class UnlockTests(unittest.TestCase):
     def invoke(self, *args, mock_processes=True):
         # Only the process listing is mocked: the user's real running game stays untouched.
         command = 'function Get-Process { @() }; ' if mock_processes else ''
-        command += (f"& '{str(SCRIPT).replace(chr(39), chr(39)*2)}' -Tree '{self.root}' -SavePath '{self.save}' "
+        command += (f"& '{str(SCRIPT).replace(chr(39), chr(39)*2)}' -Root '{self.root}' -SavePath '{self.save}' "
                     + ' '.join(args))
         return subprocess.run([str(PS), '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', command], capture_output=True, text=True)
 
@@ -84,7 +84,7 @@ class UnlockTests(unittest.TestCase):
         reference = self.root / 'reference/save/user/save_data/system_data.bin'
         reference.parent.mkdir(parents=True)
         reference.write_bytes(self.before)
-        comparison = subprocess.run([sys.executable, str(WORK.parent / 'tools/unlock_all.py'), '--tree', str(self.root),
+        comparison = subprocess.run([sys.executable, str(WORK.parent / 'tools/unlock_all.py'), '--root', str(self.root),
                                      '--save', str(reference)], capture_output=True, text=True)
         self.assertEqual(comparison.returncode, 0, comparison.stdout + comparison.stderr)
         self.assertEqual(reference.read_bytes()[flags:flags + 8 * 74], data[flags:flags + 8 * 74])
@@ -103,12 +103,12 @@ class UnlockTests(unittest.TestCase):
         self.assertFalse((self.root / 'save_backups').exists())
 
     def test_unknown_game_version_rejected(self):
-        # A game version whose save layout the tools don't know: both refuse and change nothing.
-        write_main(self.root, '00112233445566778899AABBCCDDEEFF01234567')
+        # Another game version (11.0.0's main): both refuse and change nothing.
+        write_main(self.root, '4A3F8ED7DCCE3AD4541A3A2F7622B5B57FC8A55C')
         result = self.invoke()
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('knows the save layout', result.stdout + result.stderr)
-        python = subprocess.run([sys.executable, str(WORK.parent / 'tools/unlock_all.py'), '--tree', str(self.root),
+        python = subprocess.run([sys.executable, str(WORK.parent / 'tools/unlock_all.py'), '--root', str(self.root),
                                  '--save', str(self.save)], capture_output=True, text=True)
         self.assertNotEqual(python.returncode, 0)
         self.assertEqual(self.save.read_bytes(), self.before)
@@ -116,7 +116,7 @@ class UnlockTests(unittest.TestCase):
 
     def test_running_game_guard_preserves_save(self):
         # A deterministic process-list mock with one item tests the refusal path.
-        command = f"function Get-Process {{ [pscustomobject]@{{Id=1}} }}; & '{SCRIPT}' -Tree '{self.root}' -SavePath '{self.save}'"
+        command = f"function Get-Process {{ [pscustomobject]@{{Id=1}} }}; & '{SCRIPT}' -Root '{self.root}' -SavePath '{self.save}'"
         result = subprocess.run([str(PS), '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', command], capture_output=True, text=True)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('Close every SSBU', result.stdout)

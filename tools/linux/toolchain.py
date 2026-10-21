@@ -37,16 +37,14 @@ VKD3D_SRC = VKD3D_SRC[0]
 VKD3D_BUILD = os.path.join(TOOLCHAIN, "build-vkd3d")
 
 # The game tree (dump/, build/, save/) a Linux build is made from unless --port names another:
-# the 13.0.5 update's folder (tools/update.py --tree v13.0.5) once it is built, otherwise the
-# port's own tree. That is this checkout when it has game data of its own (dump/), otherwise a
+# this checkout when it has game data of its own (dump/), otherwise a
 # native-port checkout next to it (the Linux work in a worktree of its own). The build's folder
 # and the package's dump/ record theirs in port.txt, so the two never mix trees.
 PORT_DIR = REPO if os.path.isdir(os.path.join(REPO, "dump")) else os.path.join(os.path.dirname(REPO), "native-port")
 
 
 def default_port():
-    tree = os.path.join(PORT_DIR, "v13.0.5")
-    return tree if os.path.isdir(os.path.join(tree, "build")) else PORT_DIR
+    return PORT_DIR
 
 
 def same_path(a, b):

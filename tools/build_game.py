@@ -9,15 +9,26 @@ It does the setup guide's steps (docs/BUILDING.md) one after the other and stops
 that fails, saying why. A step whose result is already there is skipped, so running it again
 carries on where it stopped. --check does the first step only (the installer uses it);
 --prepare-only all but the last.
-  1. tools     Python 3.10 or newer, and clang-cl (found by tools/cc.py) building a test program
+
+The game must be version 13.0.5 (tools/game_version.py): step 4 checks the program, step 6 the
+game data, and anything else stops with what to do. A folder set up from another version before
+(dump/exefs/main isn't 13.0.5's) is set up again from the game folder once that has 13.0.5: what
+the game files made is cleared first (reset_game_files); the save and the settings stay.
+  1. tools     Python 3.10 or newer, and clang-cl (found by tools/cc.py: deps\\llvm with deps\\msvc
+               from tools/msvc_deps.py, else Visual Studio's) building and running a test program
+               with the libraries the game links; it says which toolchain that was. With none
+               that works, it gets one that needs no Visual Studio (tools/msvc_deps.py): it asks
+               about Microsoft's license terms here, downloads in the background while steps 3
+               to 8 run (from the end of step 2: the packages), and waits for it at step 9
   2. packages  requirements.txt, installed with pip unless they are already
   3. folders   where the game files, keys and firmware are: asked (the answers are the defaults
                next time, in dump/build_folders.txt) unless --game, --keys, --firmware say
   4. program   the Program NCA among the game folder's files (tools/gamefiles.py: the guide's
                folder, an emulator's installed-content folder, an update .nsp; of base and
-               update, the update's); its ExeFS into dump/exefs, and which game and version it
-               is into dump/game_source.txt - a later run with a game folder holding another
-               version stops rather than mix the two (one folder, one version: docs/VERSIONS.md)
+               update, the update's); its ExeFS into dump/exefs, checked to be 13.0.5's (the
+               main module's build id), and which game files it came from into
+               dump/game_source.txt - a later run with a game folder holding other files of the
+               game stops rather than mix the two
   5. fonts     the .bfttf fonts of every firmware NCA into dump/fonts (or the six from a fonts
                folder in the game folder)
   6. data      dump/modules/romfs.cfg: the game folder's romfs.bin, checked and set by
@@ -25,8 +36,7 @@ carries on where it stopped. --check does the first step only (the installer use
                place when it is decrypted (tools/nca.py romfs-cfg), else decrypted first into
                dump/modules (tools/nca.py decrypt); an update's, which is a patch, is applied
                over the base's next to it (tools/update.py apply: a layered romfs.cfg); then
-               data.arc's file table is checked (tools/arc.py table_form): an early release's,
-               without a newer update, can't be read yet, and the update is the way on
+               data.arc's version is checked to be 13.0.5's (tools/arc.py data_version)
   7. dlc       dump/modules/aoc.cfg from the game folder's dlc folder (DLC .nsp files, or
                installed content), or from the DLC installed next to the game (an emulator's)
   8. fighters  the fighter modules in data.arc into dump/nro (tools/arc.py nro, which skips the
@@ -59,6 +69,8 @@ import struct
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 
 TOOLS = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, TOOLS)
@@ -165,10 +177,43 @@ def aoc_done(modules=None):
 
 
 def prepared():
-    """Everything step 3 to 8 make from the game files is there: the program, the fonts, the game
-    data's cfg (and the files it reads) and the DLC step. Then the game files are not asked for."""
+    """Everything step 3 to 8 make from the game files is there: the program (13.0.5's), the
+    fonts, the game data's cfg (and the files it reads) and the DLC step. Then the game files are
+    not asked for."""
     return (not [n for n in EXEFS_FILES if not os.path.isfile(os.path.join(EXEFS, n))]
+            and old_folder_version() is None
             and not missing_fonts(FONTS) and romfs_cfg_ok(os.path.join(MODULES, "romfs.cfg")) and aoc_done())
+
+
+def old_folder_version():
+    """The game version this folder was set up from, when that isn't 13.0.5, for a person
+    ("version 11.0.0", or "another version"); else None: nothing set up yet, or 13.0.5."""
+    import game_version
+    main = os.path.join(EXEFS, "main")
+    if not os.path.isfile(main):
+        return None
+    build_id = game_version.main_build_id(main)
+    if build_id == game_version.MAIN_BUILD_ID:
+        return None
+    name = game_version.build_name(build_id)
+    return f"version {name}" if name else "another version"
+
+
+def reset_game_files():
+    """Clear what the game files made in this folder, so that steps 4 to 9 make it again from
+    13.0.5's: the program, the game data's cfg and what the update made for it, the DLC step, the
+    fighters and the game built from them. The save, the settings, the folders asked in step 3,
+    the fonts, a decrypted base (the update is applied over it again) and the prepared shaders
+    stay; so do the modules' build folders, built again where their build id changed."""
+    gone = [EXEFS, os.path.join(DUMP, "nro"), SOURCE, os.path.join(ROOT, "version.txt"),
+            os.path.join(ROOT, "module_bases.txt"), EXE]
+    if os.path.isdir(MODULES):
+        gone += [os.path.join(MODULES, n) for n in os.listdir(MODULES) if not n.startswith("base-")]
+    for path in gone:
+        if os.path.isdir(path):
+            shutil.rmtree(path)
+        elif os.path.exists(path):
+            os.remove(path)
 
 
 def missing_packages(requirements):
@@ -190,36 +235,129 @@ def missing_packages(requirements):
 
 
 # ---- the steps ------------------------------------------------------------------------------
-def check_tools():
+def check_tools(fetch=True):
+    """Step 1. On Windows with no working compiler, `fetch` (the build, not --check) gets one that
+    needs no Visual Studio (tools/msvc_deps.py): Microsoft's license terms are asked now, and the
+    CompilerDownload returned downloads it while the game files are prepared (its start() after
+    step 2, its finish() at step 9). Otherwise None."""
     if sys.version_info < (3, 10):
         raise Failed(f"this is Python {sys.version.split()[0]}: WindowSmash needs Python 3.10 or newer "
                      + ("(Install WindowSmash.command makes deps/venv with one: docs/MACOS.md)." if MACOS else "(setup guide step 3)."))
     log(f"  Python {sys.version.split()[0]}: {sys.executable}")
     if LINUX:
         check_linux_tools()
-        return
+        return None
     if MACOS:
         check_mac_tools()
-        return
+        return None
     import cc
+    problem = windows_compiler_problem(cc)
+    if not problem:
+        return None
+    if not fetch or os.environ.get("SSBU_CLANG"):
+        raise Failed(problem)
+    log(f"  {problem.splitlines()[0]}")
+    return CompilerDownload.ask(broken=bool(cc.WINSYSROOT))
+
+
+def windows_compiler_problem(cc):
+    """Why cc's compiler can't build the game, or None (and its lines logged): it is tried on a
+    test program now, as the generated C is compiled long after the build starts: compiled as the
+    game's C is, linked with cc.link's command (every library the game links), and run."""
     clang = cc.CLANG if os.path.isfile(cc.CLANG) else shutil.which(cc.CLANG)
     if not clang:
-        raise Failed("Visual Studio's Clang tools (clang-cl.exe) were not found. Install Visual Studio with "
-                     "Desktop development with C++ and C++ Clang tools for Windows (setup guide step 4).")
-    # the generated C is compiled long after the build starts: try the compiler, the Windows SDK and the linker now
+        return ("No compiler (clang-cl.exe) was found. launchers\\Build WindowSmash.bat gets one by itself (or python "
+                "tools\\msvc_deps.py install), or install Visual Studio with Desktop development with C++ and C++ Clang tools "
+                "for Windows (setup guide step 4).")
+    if cc.WINSYSROOT:
+        fix = "Set it up again: python tools\\msvc_deps.py remove, then python tools\\msvc_deps.py install (setup guide step 4)."
+    else:
+        fix = ("Check that Visual Studio has Desktop development with C++ (with a Windows SDK) and C++ Clang tools "
+               "for Windows (setup guide step 4).")
     with tempfile.TemporaryDirectory(prefix="windowsmash-check-") as tmp:
-        src = os.path.join(tmp, "check.c")
+        src, obj, rsp, exe = (os.path.join(tmp, "check" + ext) for ext in (".c", ".obj", ".rsp", ".exe"))
         with open(src, "w") as f:
-            f.write("#include <windows.h>\n#include <stdio.h>\n"
-                    "int main(void) { printf(\"%lu\\n\", GetCurrentProcessId()); return 0; }\n")
-        lld = ["-fuse-ld=lld"] if os.path.exists(os.path.join(os.path.dirname(clang), "lld-link.exe")) else []
-        r = subprocess.run([clang, *lld, *cc.CFLAGS, src, "/Fo" + os.path.join(tmp, "check.obj"),
-                            "/Fe" + os.path.join(tmp, "check.exe")], capture_output=True, text=True)
+            f.write("#include <windows.h>\n#include <stdio.h>\n#include <d3d11.h>\n#include <d3dcompiler.h>\n"
+                    "int main(void) { printf(\"%lu %d\\n\", GetCurrentProcessId(), D3DCompile != 0); return 0; }\n")
+        r = subprocess.run([clang, "/c", *cc.CFLAGS, src, "/Fo" + obj], capture_output=True, text=True)
+        if not r.returncode:
+            with open(rsp, "w") as f:
+                f.write(f'"{obj}"')
+            r = subprocess.run(cc.link_command(rsp, exe), capture_output=True, text=True)
         if r.returncode:
-            raise Failed(f"{clang} could not build a test program. Check that Visual Studio has Desktop development "
-                         f"with C++ (with a Windows SDK) and C++ Clang tools for Windows (setup guide step 4).\n"
-                         + (r.stdout + r.stderr)[-2000:])
-    log(f"  clang-cl: {clang}")
+            return f"{clang} could not build a test program. {fix}\n" + (r.stdout + r.stderr)[-2000:]
+        r = subprocess.run([exe], capture_output=True, text=True)
+        if r.returncode:
+            return f"the test program {clang} built does not run. {fix}\n" + (r.stdout + r.stderr)[-1000:]
+        version = " ".join(subprocess.run([clang, "--version"], capture_output=True, text=True).stdout.split()[:3])   # clang version N
+    log(f"  clang-cl: {clang} ({version})")
+    log(f"  toolchain: {cc.TOOLCHAIN}")
+    return None
+
+
+class CompilerDownload:
+    """The compiler without Visual Studio (tools/msvc_deps.py: LLVM, and Microsoft's C runtime and
+    Windows SDK, into deps\\llvm and deps\\msvc), downloaded in the background while steps 3 to 8
+    prepare the game files, so that step 9 can start compiling at once. Microsoft's license terms
+    are asked first, before anything is downloaded (ask)."""
+
+    def __init__(self, deps, agreed):
+        self.deps, self.agreed = deps, agreed
+        self.lines, self.code, self.error, self.thread, self.started = [], None, None, None, None
+
+    @classmethod
+    def ask(cls, broken=False):
+        import msvc_deps
+        if broken:   # (deps\llvm and deps\msvc there, but no good: set up afresh)
+            log("  the compiler in deps\\llvm and deps\\msvc does not work: downloading it again")
+            msvc_deps.remove()
+        log("  getting a compiler that needs no Visual Studio: LLVM's clang from GitHub, and Microsoft's C runtime and")
+        log("  Windows SDK from Microsoft's servers, into deps\\llvm and deps\\msvc (about 570 MB, while the game files are prepared)")
+        try:
+            agreed = msvc_deps.agree()
+        except msvc_deps.Failed as e:
+            raise Failed(f"{e} Check the internet connection and run this again, or install Visual Studio (setup guide step 4).")
+        if not agreed[0]:
+            raise Failed("Microsoft's license terms were not accepted, so the C runtime and the Windows SDK the game is built with "
+                         "cannot be downloaded (Visual Studio comes under the same terms). Run this again to accept them, or "
+                         "install Visual Studio yourself (setup guide step 4).")
+        return cls(msvc_deps, agreed)
+
+    def start(self):
+        self.started, self.log = time.time(), self.deps.log
+        self.deps.log = self.lines.append   # (its lines are shown at step 9, not among the other steps')
+        self.thread = threading.Thread(target=self.run, daemon=True)
+        self.thread.start()
+        log("  the compiler is being downloaded in the background meanwhile")
+
+    def run(self):
+        try:
+            self.code = self.deps.install(agreed=self.agreed)
+        except Exception as e:   # (shown at step 9)
+            self.error = e
+
+    def finish(self):
+        """At step 9: waits for the download, shows what it did, and checks the compiler again."""
+        if self.thread.is_alive():
+            log("  waiting for the compiler download to finish")
+            while self.thread.is_alive():
+                self.thread.join(30)
+                progress = [l for l in self.lines if "% of" in l]
+                if self.thread.is_alive() and progress:
+                    log(progress[-1])
+        self.deps.log = self.log
+        log(f"  the compiler download ({time.time() - self.started:.0f} s since it started):")
+        for line in self.lines:
+            if "% of" not in line:
+                log(line if line.startswith("  ") else "  " + line)
+        if self.error is not None or self.code != 0:
+            raise Failed(f"The compiler could not be downloaded: {self.error or 'see above'}. Run this again to try again, or "
+                         "install Visual Studio (setup guide step 4).")
+        import cc
+        importlib.reload(cc)   # (it chose its compiler when imported: deps\llvm is there now)
+        problem = windows_compiler_problem(cc)
+        if problem:
+            raise Failed(problem)
 
 
 LINUX_CHECK = r"""#include <SDL.h>
@@ -515,8 +653,8 @@ def same_game(was, now):
 
 
 def check_same_game(rec):
-    """This folder was set up from one version of the game (dump/game_source.txt); refuse to mix in
-    another: its program, data and fighters would no longer match."""
+    """This folder was set up from one copy of the game's files (dump/game_source.txt); refuse to
+    mix in another: its program, data and fighters would no longer match."""
     if not os.path.isfile(SOURCE):
         return
     with open(SOURCE, encoding="utf-8") as f:
@@ -525,15 +663,49 @@ def check_same_game(rec):
     now = game_identity(rec)
     if was and not same_game(was, now):
         raise Failed(f"This WindowSmash folder was set up from {describe_identity(was, was_display)}, but the game "
-                     f"folder now has {describe_identity(now, rec['display_version'])} to build from. One folder holds "
-                     "one game version: set up the new one in a new WindowSmash folder, or add it as a version of its "
-                     "own (docs/VERSIONS.md).")
+                     f"folder now has {describe_identity(now, rec['display_version'])} to build from. One folder is "
+                     "set up from one copy of the game: set up the other one in a new WindowSmash folder.")
 
 
 def write_game_source(rec):
     with open(SOURCE, "w", encoding="utf-8", newline="\n") as f:
         f.write(game_identity(rec) + "\n")
         f.write(f"{rec['display_version'] or ''}\t{rec['path']}\t{rec['name'] if rec['container'] else ''}\n")
+
+
+def upgrade_old_folder(old, game, program, keys):
+    """This folder was set up from another game version (old): with 13.0.5 in the game folder,
+    clear what the old one made (reset_game_files) and go on; else stop before clearing anything.
+    When the game folder's files don't say their version (renamed ones), its program is copied
+    out on the side first and its main module looked at."""
+    import game_version
+    import gamefiles
+    problem = game_version.scan_problem(program)
+    if not problem and game_version.program_version(program) is None:
+        probe = os.path.join(DUMP, "exefs.probe")
+        shutil.rmtree(probe, ignore_errors=True)
+        try:
+            run([sys.executable, os.path.join("tools", "nca.py"), "exefs", *nca_ref(program), "--keys", keys,
+                 "--out", os.path.join("dump", "exefs.probe")],
+                f"Could not copy the program out of {gamefiles.where(program)} (see above).")
+            problem = program_problem(program, game, os.path.join(probe, "main"))
+        finally:
+            shutil.rmtree(probe, ignore_errors=True)
+    if problem:
+        raise Failed(f"This WindowSmash folder was set up from {old} of the game. {problem}")
+    if in_use(EXE):
+        raise Failed(f"The game is running from {shown(os.path.relpath(EXE, ROOT))}: close it, then run this again.")
+    log(f"\n  This folder was set up from {old} of the game. WindowSmash needs {game_version.REQUIRED} now: "
+        f"setting it up again from {game}. Your save, settings and prepared shaders stay.")
+    try:
+        reset_game_files()
+    except OSError as e:
+        raise Failed(f"The old game files could not all be cleared ({e}). Close the game and anything else using "
+                     "this folder's files, then run this again: it carries on where it stopped.")
+    trees = sorted(n for n in os.listdir(ROOT) if re.fullmatch(r"v\d+(\.\d+)*", n) and os.path.isdir(os.path.join(ROOT, n)))
+    for tree in trees:   # (made by the version tool WindowSmash had before)
+        log(f"  {tree}{os.sep} is not used any more. To play on from the save in it, copy {os.path.join(tree, 'save')} "
+            f"over this folder's save{os.sep} before starting the game; then {tree}{os.sep} can be deleted.")
 
 
 def extract_exefs(rec, keys):
@@ -585,29 +757,48 @@ def missing_fonts(folder):
     return [n for n in FONT_FILES if not os.path.isfile(os.path.join(folder, n))]
 
 
-def early_release(game, form):
-    """What to do about game data whose data.arc tools/arc.py can't read (arc.table_form): an
-    early release's. Step 4 has set this folder up for that release already (game_source.txt), so
-    the build with the update goes in a fresh folder."""
-    where = game or "your game folder"
-    by_hand = os.path.isfile(os.path.join(game, "romfs.bin")) if game else False
-    return (f"The game in {where} is an early release, without a newer update: WindowSmash can't read its data "
-            f"yet ({form}).\n"
-            f"  1. Put the game's update (an .nsp file; the newest you have) in {where}, next to the game."
-            + (" Make romfs.bin again too, with the update applied (setup guide part 2)." if by_hand else "") + "\n"
-            "  2. This WindowSmash folder is set up for that early release now and would refuse the update: extract "
-            "a fresh WindowSmash folder and run Install WindowSmash.bat there.")
+def program_problem(rec, game, main):
+    """None when the main module at `main` (copied out of the program `rec`) is 13.0.5's, else
+    what to say. A build id it doesn't know is named by the files' metadata, unless that says
+    13.0.5 (then it is "another version": a changed or mislabelled program)."""
+    import game_version
+    import gamefiles
+    if game_version.main_build_id(main) == game_version.MAIN_BUILD_ID:
+        return None
+    said = rec and game_version.program_version(rec)
+    name = game_version.build_name(game_version.main_build_id(main)) or (said if said != game_version.REQUIRED else None)
+    where = gamefiles.where(rec) if rec else shown("dump\\exefs")
+    return game_version.needs(f"the program in {where} is " + (f"version {name}" if name else "another version"), game)
+
+
+def check_program(rec, game):
+    """The program step 4 copied out is 13.0.5's (its main module's build id). One that isn't is
+    removed again, so that the folder isn't left set up from it."""
+    import game_version
+    problem = program_problem(rec, game, os.path.join(EXEFS, "main"))
+    if not problem:
+        log(f"  game version {game_version.REQUIRED} (main module {game_version.MAIN_BUILD_ID[:16]})")
+        return
+    shutil.rmtree(EXEFS, ignore_errors=True)
+    if os.path.exists(SOURCE):
+        os.remove(SOURCE)
+    raise Failed(problem)
 
 
 def check_game_data(cfg, game):
-    """The game data step 6 connected has a data.arc that tools/arc.py (step 8) reads."""
+    """The game data step 6 connected is 13.0.5's: its data.arc's version (tools/arc.py)."""
     import arc
+    import game_version
     try:
-        form, layout, _size = arc.game_data_form(cfg)
+        version = arc.game_data_version(cfg)
     except (SystemExit, OSError, ValueError, struct.error) as e:
         raise Failed(f"The game data in {cfg} can't be read: {e}")
-    if not arc.readable(form, layout):
-        raise Failed(early_release(game, arc.form_text(form, layout)))
+    if version != game_version.DATA_ARC_VERSION:
+        found = f"version {game_version.version_text(version)}" if version is not None else "an early release's"
+        by_hand = os.path.isfile(os.path.join(game, "romfs.bin")) if game else False
+        raise Failed(game_version.needs(f"the game data connected in step 6 is {found}", game)
+                     + (" Make romfs.bin again too, with the 13.0.5 update applied (setup guide part 2)." if by_hand else ""))
+    log(f"  game data version {game_version.REQUIRED}")
 
 
 def write_romfs_cfg(game, keys, the_program):
@@ -615,8 +806,8 @@ def write_romfs_cfg(game, keys, the_program):
     if os.path.isfile(romfs_bin) and (LINUX or MACOS):   # (Configure-Game-Data.ps1's checks are Windows-only: the format's here)
         from nca import is_plain_romfs
         if not is_plain_romfs(romfs_bin):
-            raise Failed(f"{romfs_bin} is not the game's data as a plain RomFS image (unencrypted, with your update "
-                         "applied). Remove it, and WindowSmash reads the data from the game's own files instead.")
+            raise Failed(f"{romfs_bin} is not the game's data as a plain RomFS image (unencrypted, with the 13.0.5 "
+                         "update applied). Remove it, and WindowSmash reads the data from the game's own files instead.")
         os.makedirs(MODULES, exist_ok=True)
         with open(os.path.join(MODULES, "romfs.cfg"), "w", newline="\n") as f:
             f.write(f"{os.path.abspath(romfs_bin)}\n0\n")
@@ -627,20 +818,20 @@ def write_romfs_cfg(game, keys, the_program):
              os.path.join("tools", "Configure-Game-Data.ps1"), "-NonInteractive", "-RomfsPath", romfs_bin,
              "-FontsDirectory", FONTS],
             f"{romfs_bin} could not be used (see above): it must be the game's data, unencrypted and with "
-            "your update applied (setup guide part 2).")
+            "the 13.0.5 update applied (setup guide part 2).")
         return
-    import arc
+    import game_version
     import gamefiles
     path, _title, program, result = the_program()
-    form = program.get("data_arc")   # (told by the scan: no decrypting a release whose data can't be used)
-    if form and not arc.readable(*form):
-        raise Failed(early_release(game, arc.form_text(*form)))
+    problem = game_version.scan_problem(program)   # (told by the scan: no decrypting a version that can't be used)
+    if problem:
+        raise Failed(problem)
     cfg = os.path.join("dump", "modules", "romfs.cfg")
     state = program["romfs"]
     if state == "plain":   # readable in place
         run([sys.executable, os.path.join("tools", "nca.py"), "romfs-cfg", *nca_ref(program), "--keys", keys, "--out", cfg],
             f"The game data inside {gamefiles.where(program)} can't be read in place (see above). Put the game's data in "
-            f"{game} as romfs.bin: unencrypted, with your update applied (setup guide part 2).")
+            f"{game} as romfs.bin: unencrypted, with the 13.0.5 update applied (setup guide part 2).")
     elif state == "encrypted":   # the game (or a release with its update merged in), as the Switch stores it
         plain = decrypt_once(program, keys)
         run([sys.executable, os.path.join("tools", "nca.py"), "romfs-cfg", plain, "--keys", keys, "--out", cfg],
@@ -656,12 +847,11 @@ def write_romfs_cfg(game, keys, the_program):
             f"The game data inside {gamefiles.where(base)} can't be read (see above).")
         log("  applying the update over the game's data (a few minutes; every block of the result is checked)")
         inner = ["--inner", program["name"]] if program["container"] else []   # (the package may hold the game too)
-        run([sys.executable, os.path.join("tools", "update.py"), "apply", path, *inner, "--base", base_cfg, "--keys", keys,
-             "--tree", ROOT],
+        run([sys.executable, os.path.join("tools", "update.py"), "apply", path, *inner, "--base", base_cfg, "--keys", keys],
             "The update could not be applied over the game's data (see above).")
     else:
         raise Failed(f"There is no romfs.bin in {game}, and {gamefiles.where(program)} holds no game data. Put the game's "
-                     "data there as romfs.bin: unencrypted, with your update applied (setup guide part 2).")
+                     "data there as romfs.bin: unencrypted, with the 13.0.5 update applied (setup guide part 2).")
 
 
 def decrypt_once(record, keys):
@@ -679,9 +869,9 @@ def decrypt_once(record, keys):
 
 
 def write_version():
-    """version.txt: the game version the launchers name (tools/pick_version.bat), data.arc's, as
-    install_version.py describe writes it for a version's own folder. Once: one folder holds one
-    game version. (Only a label: one that can't be read doesn't stop the build.)"""
+    """version.txt: the game version of this folder, data.arc's, which the game's settings menu
+    shows. Once (reset_game_files removes it with the rest). Only a label: one that can't be read
+    doesn't stop the build."""
     path = os.path.join(ROOT, "version.txt")
     if os.path.isfile(path):
         return
@@ -693,7 +883,7 @@ def write_version():
         text = (f"{data}\n# game version of this folder (tools/build_game.py): the version, then what it is made of\n"
                 f"main {Module(os.path.join(EXEFS, 'main')).build_id}\ndata.arc {data}\n")
     except (SystemExit, Exception) as e:   # (arc.py says what it can't read with SystemExit)
-        log(f"  (the game version could not be read for the launchers: {e})")
+        log(f"  (the game version could not be read for version.txt: {e})")
         return
     with open(path, "w", newline="\n") as f:
         f.write(text)
@@ -787,22 +977,25 @@ def in_use(path):
 
 def build(a):
     log("[1/9] Check the tools")
-    check_tools()
+    compiler = check_tools()   # (a CompilerDownload when there is no compiler yet: it downloads during steps 3-8)
 
     log("\n[2/9] Install the Python packages")
     install_packages()
+    if compiler:   # (after the packages: unpacking LLVM needs zstandard before Python 3.14)
+        compiler.start()
 
     cfg, aoc, no_aoc = os.path.join(MODULES, "romfs.cfg"), os.path.join(MODULES, "aoc.cfg"), os.path.join(MODULES, "aoc.none")
     if a.game and os.path.exists(no_aoc):   # (a game folder named now may have DLC that the last one hadn't)
         os.remove(no_aoc)
-    exefs_done = not [n for n in EXEFS_FILES if not os.path.isfile(os.path.join(EXEFS, n))]
-    romfs_done = romfs_cfg_ok(cfg)
+    old = old_folder_version()   # (set up from another version before: set up again from 13.0.5's files)
+    exefs_done = not old and not [n for n in EXEFS_FILES if not os.path.isfile(os.path.join(EXEFS, n))]
+    romfs_done = not old and romfs_cfg_ok(cfg)
     log("\n[3/9] Your folders")
     os.makedirs(DUMP, exist_ok=True)
     saved = load_saved()
     game = keys = firmware = fonts_from = None
     # (a game folder named on the command line is always looked at: it may hold another version now)
-    if a.game or not (exefs_done and romfs_done and aoc_done()):
+    if a.game or old or not (exefs_done and romfs_done and aoc_done()):
         game = ask_folder("game", a.game, saved)
     if missing_fonts(FONTS):
         fonts_from = "game" if game and not missing_fonts(os.path.join(game, "fonts")) else "firmware"
@@ -820,13 +1013,21 @@ def build(a):
         found = found or find_program(game, keys)
         return found
 
+    if old:
+        upgrade_old_folder(old, game, the_program()[2], keys)
+
     log(shown("\n[4/9] Copy the game's program (dump\\exefs)"))
     if exefs_done:
         if game:
             check_same_game(the_program()[2])
         log("  already done")
     else:
+        import game_version
+        problem = game_version.scan_problem(the_program()[2])   # (the files say so: nothing copied out)
+        if problem:
+            raise Failed(problem)
         extract_exefs(the_program()[2], keys)
+        check_program(the_program()[2], game)
 
     log(shown("\n[5/9] Take the fonts out of your firmware (dump\\fonts)"))
     if fonts_from is None:
@@ -878,6 +1079,8 @@ def build(a):
     if MACOS:   # (the app the program is in)
         exe = os.path.relpath(os.path.dirname(os.path.dirname(os.path.dirname(EXE))), ROOT)
     log(f"\n[9/9] Build the game ({exe})")
+    if compiler:
+        compiler.finish()
     if a.prepare_only:
         log("  not now (--prepare-only): everything the build needs is ready")
         return
@@ -972,7 +1175,7 @@ def main():
     try:
         if a.check:
             log("[1/9] Check the tools")
-            check_tools()
+            check_tools(fetch=False)
             log("\nThe tools are ready.")
         else:
             build(a)

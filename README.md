@@ -11,7 +11,7 @@
   <a href="docs/PLAYING.md"><strong>Playing</strong></a> ·
   <a href="docs/MULTIPLAYER.md"><strong>Multiplayer</strong></a> ·
   <a href="docs/DLC-AND-UNLOCKS.md"><strong>DLC &amp; unlocks</strong></a> ·
-  <a href="docs/UPDATES.md"><strong>Game updates</strong></a> ·
+  <a href="docs/UPDATES.md"><strong>13.0.5 update</strong></a> ·
   <a href="docs/LINUX.md"><strong>Linux</strong></a> ·
   <a href="docs/MACOS.md"><strong>macOS</strong></a> ·
   <a href="docs/TECHNICAL.md"><strong>How it works</strong></a>
@@ -25,6 +25,8 @@
 
 > [!IMPORTANT]
 > **This source code does not contain the game.** It has no game files, keys or firmware. You need your own copy of Super Smash Bros. Ultimate, dumped from your own Nintendo Switch. WindowSmash builds a Windows program from that copy, on your PC.
+>
+> **Your copy must be version 13.0.5**, the game's last update: for example the game together with its 13.0.5 update `.nsp`. [Which copies count](#game-version-1305).
 
 ## Contents
 
@@ -54,7 +56,7 @@ The game itself still comes from your files. This repository holds only the tran
 - **Online play through Local Wireless**: rooms appear for every player in the online lobby, and nobody has to set up their router.
 - **The game's own Online mode**, new and still being tested: Quickplay against WindowSmash's own game server.
 - **Your DLC fighters**, and a tool that unlocks the base-game roster on your own save.
-- **Any game version**, including 13.0.5 with Kazuya and Sora, and several versions side by side.
+- **Game version 13.0.5**, the game's last update, which has every DLC fighter up to Kazuya and Sora.
 - **An experimental Linux version**, built from the same source: `install-windowsmash.sh` sets it up on Linux in one go ([Linux](docs/LINUX.md)).
 - **An experimental macOS version** for Macs with Apple silicon, built from the same source: `Install WindowSmash.command` sets it up on the Mac in one go ([macOS](docs/MACOS.md)).
 
@@ -67,9 +69,19 @@ The game itself still comes from your files. This repository holds only the tran
 | **Graphics** | Any graphics card or chip that supports DirectX 11, with an up-to-date driver. |
 | **Memory** | 16 GB recommended. |
 | **Free space** | About 60 GB on the drive WindowSmash goes on, plus room for your game files (about 17 GB). |
-| **Your game files** | Super Smash Bros. Ultimate from your own Switch (a game card dump, an `.nsp`, or the game installed in yuzu or Ryujinx), with your console's keys and firmware. Any version should work; **11.0.0** and **13.0.5** have been tested. [Step 2](#step-2-have-your-game-files-ready) below says where to put them. |
-| **Two free tools** | Python and the Visual Studio build tools. `Install WindowSmash.bat` installs them for you. |
-| **Time** | About 15 minutes of your own time, plus up to half an hour while the tools install and 30 minutes to a few hours while your PC builds the game. |
+| **Your game files** | Super Smash Bros. Ultimate from your own Switch (a game card dump, an `.nsp`, or the game installed in yuzu or Ryujinx) at **version 13.0.5** ([below](#game-version-1305)), with your console's keys and firmware. [Step 2](#step-2-have-your-game-files-ready) below says where to put them. |
+| **Two free tools** | Python and a compiler. `Install WindowSmash.bat` installs them for you. |
+| **Time** | About 15 minutes of your own time, plus a few minutes while the tools download and 30 minutes to a few hours while your PC builds the game. |
+
+### Game version 13.0.5
+
+WindowSmash plays **version 13.0.5** of the game, its last update, and no other. Any of these is 13.0.5:
+
+- **The game and its 13.0.5 update** (an `.nsp`), side by side in one folder. The installer applies the update for you. The game as first released (1.0.0) is the best base: the update applies over it exactly. A game with an earlier update merged in works too.
+- **The game installed in yuzu or Ryujinx, updated to 13.0.5.**
+- **A dump with 13.0.5 merged in already.**
+
+With any other version, the installer says so in red and doesn't build until the 13.0.5 update is in the game folder. One version for everyone means anyone can play with anyone, and every bug is found and fixed in the same game. The [13.0.5 update guide](docs/UPDATES.md) has the details, including what happens to a folder an older WindowSmash built from another version.
 
 ## Install and play
 
@@ -80,10 +92,10 @@ The whole journey at a glance:
 | Step | What happens | Your time |
 | :---: | :--- | :--- |
 | **1** | **Check your PC** against [what you need](#what-you-need). | 2 minutes |
-| **2** | **Have your game files ready**: the game, its update and DLC, your keys and firmware. | 10 minutes |
+| **2** | **Have your game files ready**: the game, its 13.0.5 update and DLC, your keys and firmware. | 10 minutes |
 | **3** | **Download WindowSmash** and extract it. | 5 minutes |
 | **4** | **Start the installer**: double-click `Install WindowSmash.bat`. | 1 minute |
-| **5** | **Let it install the tools** it needs: Python, the Visual Studio build tools and SDL3, if they are missing. | 10–30 minutes, mostly waiting |
+| **5** | **Let it install the tools** it needs: Python, a compiler and SDL3, if they are missing. | A few minutes, mostly waiting |
 | **6** | **Choose your folders** and your online name in its setup window. | 5 minutes |
 | **7** | **Wait while it builds the game.** | 30 minutes to a few hours |
 | **8** | **Play.** Double-click the **Play SSBU** shortcut on your desktop. | |
@@ -94,17 +106,17 @@ Compare your PC with [what you need](#what-you-need) above. (**Settings → Syst
 
 ### Step 2: Have your game files ready
 
-**Played the game in yuzu or Ryujinx on this PC?** Then your files are ready: the installer finds your keys, your firmware and the installed game, with its update and DLC, by itself.
+**Played the game in yuzu or Ryujinx on this PC, updated to 13.0.5?** Then your files are ready: the installer finds your keys, your firmware and the installed game, with its update and DLC, by itself.
 
 **Otherwise**, put your files in three folders. The names are examples; any folders will do:
 
 | Folder | What goes in it |
 | :--- | :--- |
-| `D:\MyDump` | The game: a game card dump (`.xci`), an `.nsp`, or its `.nca` files. Its update `.nsp`, if you have one. Your DLC `.nsp` files, loose or in a folder named `dlc`. |
+| `D:\MyDump` | The game: a game card dump (`.xci`), an `.nsp`, or its `.nca` files. Its **13.0.5 update** `.nsp`, unless your dump has 13.0.5 merged in already. Your DLC `.nsp` files, loose or in a folder named `dlc`. |
 | `D:\MyKeys` | `prod.keys` and `title.keys`, from your Switch. |
 | `D:\MyFirmware` | Your Switch's firmware: a few hundred `.nca` files. WindowSmash takes the game's fonts from them. |
 
-- **Any game version should work.** WindowSmash has been tested with **11.0.0** and **13.0.5**. With an update file next to the game, the installer applies it for you. The game as first released (1.0.0) is the best base for an update. Without its update, though, the original release doesn't work yet: WindowSmash can't read its data.
+- **The game must be version 13.0.5** ([which copies count](#game-version-1305)). With the 13.0.5 update next to the game, the installer applies it for you; the game as first released (1.0.0) is the best base for it.
 - **Compressed files** (`.nsz`, `.xcz`) have to be turned back into `.nsp` or `.xci` first.
 - **Leave your game files where they are** after the install: depending on their kind, the game keeps reading its data from them.
 
@@ -128,7 +140,7 @@ A window opens and shows each step as it goes. First it fetches the newest Windo
 The installer installs only what your PC is missing:
 
 - **Python**, which runs WindowSmash's helper programs. If your PC has none, the installer puts a copy in the WindowSmash folder; nothing else on your PC changes.
-- **The Visual Studio Build Tools**, Microsoft's free tools that build the game. They download several gigabytes, and a progress window shows how far it is. Windows asks whether to allow the changes: click **Yes**. If it asks you to restart, do so, then double-click `Install WindowSmash.bat` again.
+- **A compiler**, which builds the game: LLVM's clang with Microsoft's C runtime and Windows SDK, downloaded into the WindowSmash folder (about 570 MB). Microsoft's parts come under Microsoft's license terms: the installer shows where to read them and asks whether you accept them; type `yes` and press <kbd>Enter</kbd>. If that download doesn't work, it installs the Visual Studio Build Tools instead, Microsoft's free tools: several gigabytes, with a progress window. Windows asks whether to allow the changes: click **Yes**. If it asks you to restart, do so, then double-click `Install WindowSmash.bat` again.
 - **SDL3**, for PlayStation, Switch Pro and most other controllers.
 
 Music and movies need nothing extra: their decoders come with WindowSmash and are built with the game.
@@ -143,7 +155,7 @@ When the tools are ready, the setup window opens:
 | **Keys** | `D:\MyKeys`, or the one it found. |
 | **Firmware** | `D:\MyFirmware`, or the one it found. |
 
-Folders it found on your PC are filled in already; change any of them with **Browse…**. The line under each box says what is in the folder, for example *the game's update: 13.0.5* and *DLC: 99 add-on contents*. Green means it's fine; red says what's missing.
+Folders it found on your PC are filled in already; change any of them with **Browse…**. The line under each box says what is in the folder, for example *the game's update: 13.0.5* and *DLC: 99 add-on contents*. Green means it's fine; red says what's missing. If the game isn't version 13.0.5, the line says so: put the 13.0.5 update `.nsp` in the game folder and click **Check files**.
 
 Then:
 
@@ -174,6 +186,8 @@ Then see the [controls](#controls) and how to [play with friends](#play-with-fri
 
 Double-click `Install WindowSmash.bat` again. It downloads the newest WindowSmash from GitHub if there is one, and builds again, which takes minutes rather than hours. Your game files, settings, save and online name stay as they are.
 
+A folder an older WindowSmash built from another game version, such as 11.0.0, is set up again as 13.0.5 once your game folder has the 13.0.5 update; your save and settings stay. See [a folder built from another version](docs/UPDATES.md#a-folder-built-from-another-version).
+
 ### If something goes wrong
 
 The installer stops with a message saying what went wrong and what to do; `install.log` keeps everything it showed. [If something goes wrong](docs/BUILDING.md#if-something-goes-wrong) in the setup guide lists the usual problems, and [getting help](#getting-help) says where to ask. Prefer to set it up yourself, step by step? The [setup guide](docs/BUILDING.md) has every step by hand.
@@ -183,7 +197,7 @@ The installer stops with a message saying what went wrong and what to do; `insta
 
 <br>
 
-You need Windows 10/11 x64. `Install WindowSmash.bat` installs Python 3.10 or newer and the Visual Studio Build Tools with **C++ Clang tools for Windows** when they are missing. `-NoWizard` asks its questions in the console instead of the setup window, with the folders you give as the answers to accept. The example paths are your game files in `D:\MyDump`, your keys in `D:\MyKeys` and your firmware in `D:\MyFirmware`.
+You need Windows 10/11 x64. `Install WindowSmash.bat` installs Python 3.10 or newer and a compiler when they are missing: LLVM's clang-cl with Microsoft's C runtime and Windows SDK in `deps` (`tools\msvc_deps.py`, after you accept Microsoft's license terms), or the Visual Studio Build Tools with **C++ Clang tools for Windows** if that fails (`-BuildTools` goes straight to them). `-NoWizard` asks its questions in the console instead of the setup window, with the folders you give as the answers to accept. The example paths are your game files in `D:\MyDump` (the game with its 13.0.5 update), your keys in `D:\MyKeys` and your firmware in `D:\MyFirmware`.
 
 ```powershell
 git clone https://github.com/SNO2207/WindowSmash.git
@@ -233,7 +247,7 @@ Plug in a controller and press a button: each pad becomes the next free player, 
 | **Lobby code** | Friends only, through the online lobby | Everyone adds the same code to `online_server.txt`. Only players with that code see your rooms. |
 | **Private room** | A group with one host | The host runs `launchers\Host SSBU Netplay.bat`; the others run `launchers\Join SSBU Netplay.bat` and type the host's address. |
 
-Everyone needs the **same game version**, and each PC uses its own save. The [multiplayer guide](docs/MULTIPLAYER.md) walks through each way and what to do when a room doesn't show up.
+Everyone runs game version **13.0.5**, so anyone can play with anyone. Each PC uses its own save. The [multiplayer guide](docs/MULTIPLAYER.md) walks through each way and what to do when a room doesn't show up.
 
 Looking for people to play with? Ask on the [Discord server](https://discord.gg/pkgyYGf3YB).
 
@@ -245,8 +259,7 @@ Looking for people to play with? Ask on the [Discord server](https://discord.gg/
 | [Playing](docs/PLAYING.md) | change the controls or the window, and find saves, screenshots and problem reports. |
 | [Multiplayer](docs/MULTIPLAYER.md) | play with other people online or in a private room. |
 | [DLC and unlocks](docs/DLC-AND-UNLOCKS.md) | use your DLC, or unlock every base-game fighter on your save. |
-| [Game updates](docs/UPDATES.md) | apply an update file, such as 13.0.5, as a version of its own. |
-| [Several versions](docs/VERSIONS.md) | keep more than one game version and choose one when you start. |
+| [The 13.0.5 update](docs/UPDATES.md) | see which copies of the game count as 13.0.5, how the update is applied, and what happens to a folder built from another version. |
 | [Linux](docs/LINUX.md) | install, build and run the experimental Linux version. |
 | [macOS](docs/MACOS.md) | install, build and run the experimental version for Macs with Apple silicon. |
 | [Runtime packages](docs/RUNTIME-SETUP.md) | set up a ready-built runtime package with your own game data. |
@@ -259,13 +272,13 @@ WindowSmash is **experimental**. Menus and matches run and Local Wireless connec
 
 | Area | Where it stands |
 | :--- | :--- |
-| **Game versions** | Any version should work. **11.0.0** is the most tested. **13.0.5** has been checked through its menus and full roster, its matches less so. Other versions haven't been tried. |
+| **Game version** | **13.0.5** only. Its menus and full roster have been checked, its matches less so. |
 | **CPU and loading** | The game's code is translated to C ahead of time; fighter modules are compiled too and loaded when the game asks for them. |
 | **Graphics** | Direct3D 11. Shaders compile the first time each is used, so a new effect can hitch once. `launchers\Prepare Shaders.bat` can compile them ahead of time. |
 | **Controllers** | Up to eight players on most pads, plus the keyboard. Testing with real pads has been limited so far. |
 | **Display** | Windowed, borderless or full screen, kept 16:9, with pacing for fixed-refresh and variable-refresh monitors. |
 | **Audio and movies** | Music (Opus) and movies (VP9) are decoded by libopus and libvpx, built from the sources that come with WindowSmash. |
-| **DLC** | The DLC fighters your version has: 11.0.0 has them up to Pyra/Mythra; Kazuya came with 12.0.0 and Sora with 13.0.0. |
+| **DLC** | Every DLC fighter you own, Kazuya and Sora included: 13.0.5 has them all. |
 | **Multiplayer** | The online lobby (with direct connections) and private rooms work. Complete matches between two PCs, and the whole roster online, haven't been fully verified. |
 | **Linux** | Experimental, built from the same source and drawn through DXVK on Vulkan: on Linux itself with `install-windowsmash.sh`, or cross-compiled on Windows. |
 | **macOS** | Experimental: Macs with Apple silicon and macOS 14.5 or newer, built on the Mac itself with `Install WindowSmash.command` and drawn by a Metal renderer of its own. **13.0.5** has been checked through its opening and menus at 60 fps; matches haven't been yet. |
@@ -303,7 +316,7 @@ Join the **[recomps.wtf Discord server](https://discord.gg/pkgyYGf3YB)** to:
 
 When something goes wrong, first look at [If something goes wrong](docs/BUILDING.md#if-something-goes-wrong) in the setup guide. For a quick question, ask on [Discord](https://discord.gg/pkgyYGf3YB). To report a problem, open an issue and include:
 
-- the game version, your Windows version, and your graphics card and driver version;
+- your Windows version, and your graphics card and driver version;
 - which WindowSmash you have (the date you downloaded it, or the output of `git rev-parse --short HEAD`);
 - what you did, what you expected, and what happened instead;
 - after a crash or a freeze, the `.txt` report from the `reports\` folder, and the end of `build\play.log`.
@@ -331,7 +344,7 @@ The game-backed instruction and function tests are in the [technical guide](docs
 | `third_party/` | The sources of libopus and libvpx's VP9 decoder, built during the build, with their license texts. |
 | `docs/` | These guides. |
 
-Everything generated or personal stays out of Git: `build/`, `dump/`, `deps/`, `save/`, version folders such as `v13.0.5/`, caches, captures, reports and local bundles.
+Everything generated or personal stays out of Git: `build/`, `dump/`, `deps/`, `save/`, caches, captures and reports.
 
 ## Legal
 

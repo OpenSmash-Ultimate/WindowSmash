@@ -1,37 +1,82 @@
 """Host toolchain wrapper: compiles generated C with clang-cl."""
 import glob
+import json
 import os
+import re
 import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor
 
 import codec_libs   # (this folder, which every importer of cc puts on sys.path)
 
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+RUNTIME = os.path.join(ROOT, "runtime")
+DEPS_LLVM = os.path.join(ROOT, "deps", "llvm")   # tools/msvc_deps.py sets these two up
+DEPS_MSVC = os.path.join(ROOT, "deps", "msvc")
 
-def _find_clang():
-    """clang-cl: SSBU_CLANG if set, else Visual Studio's own (the "C++ Clang tools" component),
-    newest edition first, else a standalone LLVM install, else whatever is on PATH."""
+
+def _deps_record(folder):
+    """A deps folder's windowsmash.json (msvc_deps.py writes it last: no record, not finished)."""
+    try:
+        with open(os.path.join(folder, "windowsmash.json"), encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def _find_toolchain():
+    """(clang-cl, the /winsysroot folder or None, which toolchain that is, in words):
+    SSBU_CLANG if set; else deps\\llvm's with deps\\msvc as the system root, when tools/msvc_deps.py
+    has set both up (no Visual Studio needed); else Visual Studio's own (the "C++ Clang tools"
+    component), newest edition first, else a standalone LLVM install, else whatever is on PATH.
+    The last three find the C runtime and the Windows SDK themselves, through Visual Studio."""
     if os.environ.get("SSBU_CLANG"):
-        return os.environ["SSBU_CLANG"]
+        return os.environ["SSBU_CLANG"], None, "SSBU_CLANG"
+    llvm, msvc = _deps_record(DEPS_LLVM), _deps_record(DEPS_MSVC)
+    clang = os.path.join(DEPS_LLVM, "bin", "clang-cl.exe")
+    if llvm is not None and msvc is not None and os.path.isfile(clang):
+        return clang, DEPS_MSVC, (f"deps\\llvm (LLVM {llvm.get('version')}) with deps\\msvc (MSVC {msvc.get('msvc')}, "
+                                  f"Windows SDK {msvc.get('sdk')}): no Visual Studio")
     def vs_major(path):   # the folder is a year up to 2022 (2022 = 17), a major version since (18)
         name = path.split(os.sep + "Microsoft Visual Studio" + os.sep)[1].split(os.sep)[0]
         return {"2017": 15, "2019": 16, "2022": 17}.get(name, int(name) if name.isdigit() else 0)
-    found = []
     for root in (os.environ.get("ProgramFiles", r"C:\Program Files"), os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")):
-        found += sorted(glob.glob(os.path.join(root, "Microsoft Visual Studio", "*", "*", "VC", "Tools", "Llvm", "x64", "bin", "clang-cl.exe")),
-                        key=vs_major, reverse=True)
+        found = sorted(glob.glob(os.path.join(root, "Microsoft Visual Studio", "*", "*", "VC", "Tools", "Llvm", "x64", "bin", "clang-cl.exe")),
+                       key=vs_major, reverse=True)
+        if found:
+            return found[0], None, "Visual Studio's C++ Clang tools"
     for root in (os.environ.get("ProgramFiles", r"C:\Program Files"),):
-        found += glob.glob(os.path.join(root, "LLVM", "bin", "clang-cl.exe"))
-    return found[0] if found else "clang-cl"
+        for clang in glob.glob(os.path.join(root, "LLVM", "bin", "clang-cl.exe")):
+            return clang, None, "LLVM's installer (Program Files), with Visual Studio's C runtime and Windows SDK"
+    return "clang-cl", None, "clang-cl on the PATH"
 
 
-CLANG = _find_clang()
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-RUNTIME = os.path.join(ROOT, "runtime")
+CLANG, WINSYSROOT, TOOLCHAIN = _find_toolchain()
 # Guest FP semantics need IEEE-exact arithmetic: no contraction, no fast-math. (BASE_CFLAGS is
-# also what the codec libraries are compiled with: same instruction set, same C runtime.)
-BASE_CFLAGS = ["/nologo", "/arch:AVX2", "-mfma", "-mf16c", "-fno-strict-aliasing", "/clang:-ffp-contract=off", "-w"]
+# also what the codec libraries are compiled with: same instruction set, same C runtime.) With
+# deps\msvc, /winsysroot is where the C runtime's and the Windows SDK's headers and libraries are.
+BASE_CFLAGS = ["/nologo", "/arch:AVX2", "-mfma", "-mf16c", "-fno-strict-aliasing", "/clang:-ffp-contract=off", "-w",
+               *(["/winsysroot", WINSYSROOT] if WINSYSROOT else [])]
 CFLAGS = [*BASE_CFLAGS, "/I", RUNTIME]
+# Linking through clang-cl: with lld-link when it is next to clang-cl (else Visual Studio's link.exe),
+# and LINK_OPTIONS after /link. With deps\msvc both are given the system root. clang-cl, given
+# /winsysroot, hands lld-link the root's library folders (-libpath:). lld-link, given /winsysroot:,
+# does not add the folders of a Visual Studio it finds on its own. Without the root, clang-cl hands
+# lld-link no library folders on a PC without Visual Studio. lld-link would then add the root's
+# folders only once an object file has told it the machine type, and clang-cl puts the libraries
+# named after /link before the objects. So none of SYSTEM_LIBS was found (players' builds stopped
+# at the link; on a PC with Visual Studio, clang-cl hands lld-link VS's folders instead, which
+# hides this).
+def link_flags(root):
+    """(LINK_FLAGS, LINK_OPTIONS) for a system root, or for None."""
+    lld = ["-fuse-ld=lld"] if os.path.exists(os.path.join(os.path.dirname(CLANG), "lld-link.exe")) else []
+    return (lld + (["/winsysroot", root] if root else []), ["/winsysroot:" + root] if root else [])
+
+
+LINK_FLAGS, LINK_OPTIONS = link_flags(WINSYSROOT)
+# the Windows libraries the game links (all from the Windows SDK)
+SYSTEM_LIBS = ("winmm.lib", "user32.lib", "gdi32.lib", "d3d11.lib", "dxgi.lib", "d3dcompiler.lib", "dxguid.lib",
+               "ws2_32.lib", "ole32.lib", "oleaut32.lib")
 
 # The audio and video codecs: libopus for the hwopus service (music) and libvpx for the video
 # decode engine's VP9 (movies). Normally built from the sources under third_party/ by
@@ -67,6 +112,38 @@ else:
     SDL3_DLL = None
 EXTRA_LIBS = OPUS_LIBS + VPX_LIBS + (["/NODEFAULTLIB:msvcrt.lib"] if EXTERNAL_LIBS else [])
 
+# Compiler crashes. A player's build stopped on two files that clang-cl crashed on (access violations,
+# one in the parser, one in the optimiser) where the very same clang-cl compiles them here: a PC short
+# of memory, or one not quite stable, does that, and it rarely happens twice to the same file. So
+# compile_each compiles a file the compiler crashed on again, on its own once the others are done, at
+# these levels: its own, then /O1 (fewer optimiser passes; the giant functions are built at /O1 anyway).
+# Never /Od: the C's huge functions would want huge stack frames. A crash is told from an error in the
+# code by what clang prints (it exits with 1 either way): its crash handler's report, or LLVM's own fatal
+# errors such as running out of memory; a clang-cl that crashes outright exits with the exception code.
+RETRY = {"/O2": ("/O2", "/O1"), "/O1": ("/O1", "/O1")}
+CRASH_SIGNS = ("PLEASE submit a bug report", "Stack dump:", "frontend command failed", "LLVM ERROR:")
+# and without a bug report's files: after a crash clang would preprocess the file again, into %TEMP%
+NO_CRASH_FILES = "-fno-crash-diagnostics"
+
+
+def crashed(code, out):
+    """Whether a failed compile (exit code, output) was the compiler crashing."""
+    return code < 0 or code >= 0xC0000000 or any(sign in out for sign in CRASH_SIGNS)
+
+
+def crash_cause(code, out):
+    """A crash's cause in a few words, for the build's log."""
+    if "LLVM ERROR: out of memory" in out:
+        return "out of memory"
+    found = re.search(r"Exception Code: (0x[0-9A-Fa-f]+)", out)
+    return f"exception {found.group(1)}" if found else f"exception 0x{code:08X}" if code >= 0xC0000000 else "a crash"
+
+
+def crash_report(out):
+    """A crash's output without the compiler's command line and its raw stack frames."""
+    return "\n".join(line for line in out.splitlines() if line.strip() and not re.match(r"\s*#\d+ 0x", line)
+                     and "Program arguments:" not in line and not line.startswith("PLEASE submit"))
+
 
 def compile_one(src, obj, opt="/O2"):
     r = subprocess.run([CLANG, "/c", opt, *CFLAGS, src, "/Fo" + obj], capture_output=True, text=True)
@@ -81,21 +158,56 @@ def compile_many(sources, jobs=16, opt="/O2"):
         return list(pool.map(lambda s: compile_one(s, os.path.splitext(s)[0] + ".obj", opt), sources))
 
 
-def compile_each(jobs_list, jobs=16, started=None, finished=None):
+def _compile(src, obj, opt):
+    r = subprocess.run([CLANG, "/c", opt, *CFLAGS, NO_CRASH_FILES, src, "/Fo" + obj], capture_output=True, text=True)
+    return r.returncode, r.stdout + r.stderr
+
+
+def compile_each(jobs_list, jobs=16, started=None, finished=None, log=print):
     """Compile (src, obj, opt) triples in parallel, in order; returns [(src, error text)] for
     failures. started(job) and finished(job, seconds), if given, are called (from the worker
-    threads) as each one starts and ends."""
+    threads) as each one starts and ends. A file the compiler crashed on is compiled again once
+    the others are done, on its own (RETRY); log() says so."""
     def one(job):
         src, obj, opt = job
         if started:
             started(job)
         t0 = time.time()
-        r = subprocess.run([CLANG, "/c", opt, *CFLAGS, src, "/Fo" + obj], capture_output=True, text=True)
+        code, out = _compile(src, obj, opt)
         if finished:
             finished(job, time.time() - t0)
-        return (src, r.stdout + r.stderr) if r.returncode else None
+        return (job, code, out) if code else None
     with ThreadPoolExecutor(jobs) as pool:
-        return [f for f in pool.map(one, jobs_list) if f]
+        failed = [f for f in pool.map(one, jobs_list) if f]
+    return [f for f in (_compile_again(*f, log) for f in failed) if f]
+
+
+def _compile_again(job, code, out, log):
+    """A failed compile's (src, error text), or None if it was a crash and the file compiles now."""
+    src, obj, opt = job
+    name = os.path.basename(src)
+    if not crashed(code, out):
+        return src, out
+    for again in RETRY.get(opt, (opt, opt)):
+        log(f"the compiler crashed on {name} ({crash_cause(code, out)}): compiling it again on its own"
+            + (f", at {again}" if again != opt else ""))
+        code, out = _compile(src, obj, again)
+        if not code:
+            log(f"{name} compiled" + (f" (at {again}: a little less optimised, works the same)" if again != opt else ""))
+            return None
+        if not crashed(code, out):
+            return src, out
+    return src, (f"the compiler (clang-cl) crashed on this file {1 + len(RETRY.get(opt, (opt, opt)))} times. The same "
+                 "file compiles on other PCs with the same compiler, so this PC most likely ran out of memory or is not "
+                 "quite stable (overclocked, or overheating). Close other programs and run the build again: it carries "
+                 "on where it stopped.\n" + crash_report(out))
+
+
+def link_command(rsp, exe, options=(), libs=()):
+    """clang-cl's command that links the objects listed in the response file `rsp` into `exe`, with
+    SYSTEM_LIBS and `libs`; `options` go to the linker. (build_game.py's compiler check links its
+    test program with it too, so that the check tries what the build does.)"""
+    return [CLANG, "/nologo", *LINK_FLAGS, "@" + rsp, "/Fe" + exe, "/link", *LINK_OPTIONS, *options, *SYSTEM_LIBS, *libs]
 
 
 def link(objs, exe, options=()):
@@ -106,8 +218,7 @@ def link(objs, exe, options=()):
     rsp = exe + ".rsp"
     with open(rsp, "w") as f:
         f.write("\n".join(f'"{o}"' for o in objs))
-    lld = ["-fuse-ld=lld"] if os.path.exists(os.path.join(os.path.dirname(CLANG), "lld-link.exe")) else []
-    r = subprocess.run([CLANG, "/nologo", *lld, "@" + rsp, "/Fe" + exe, "/link", "/HIGHENTROPYVA:NO", "/MAP:" + exe[:-4] + ".map", *options, "winmm.lib", "user32.lib", "gdi32.lib", "d3d11.lib", "dxgi.lib", "d3dcompiler.lib", "dxguid.lib", "ws2_32.lib", "ole32.lib", "oleaut32.lib", *EXTRA_LIBS],
+    r = subprocess.run(link_command(rsp, exe, ["/HIGHENTROPYVA:NO", "/MAP:" + exe[:-4] + ".map", *options], EXTRA_LIBS),
                        capture_output=True, text=True)
     if r.returncode:
         lines = (r.stdout + r.stderr).splitlines()

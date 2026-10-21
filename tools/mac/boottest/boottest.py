@@ -11,8 +11,7 @@ cleanly through svcExitProcess. No game files.
 
 Usage: boottest.py [--tree <dir>] [--jobs N] [--only direct|open|launcher] [--show]
   --tree  the made-up game's folder (default: ~/Library/Caches/WindowSmash/boottest - not in the
-          repository, where the launchers and install_version.py would list it as a game version),
-          laid out as a game tree: build/<module>/ (the C), dump/modules/ (the images), build-mac/
+          repository, whose own game it is not), laid out as a game tree: build/<module>/ (the C), dump/modules/ (the images), build-mac/
           (what build_mac.py makes: kept, so a second run only links)
   --show  print each start's log
 The starts, each showing the game's window for a moment:
@@ -34,8 +33,7 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(HERE)))
 MODULES = ("main", "subsdk0", "sdk")
-# (outside the repository: a folder in it laid out as a game tree, with a built game, is a version
-# the launchers offer - tools/mac/pick_version.sh - and modcache and install_version.py list)
+# (outside the repository: its own dump/ and build/ are the real game's)
 TREE = os.path.join(os.path.expanduser("~"), "Library", "Caches", "WindowSmash", "boottest")
 # A string the guest code uses, at the address before it: "= 0x<address>ull; X(n) = <length>; /* "<text>" */"
 STRING = re.compile(r'= 0x([0-9A-Fa-f]+)ull; X\(\d+\) = (\d+);\s*/\* "([^"]*)" \*/')

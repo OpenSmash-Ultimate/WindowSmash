@@ -51,6 +51,23 @@ class PickProgramTests(unittest.TestCase):
                                       record('base.nca', 'base')])
         self.assertEqual(got['name'], 'u13.nca')
 
+    def test_13_0_5_of_several_updates(self):
+        got = gamefiles.pick_program([record('u13.nca', 'update', version=2031616), record('u14.nca', 'update', version=32 << 16),
+                                      record('base.nca', 'base')])
+        self.assertEqual(got['name'], 'u13.nca')
+
+    def test_a_dump_with_13_0_5_merged_in_over_an_older_update(self):
+        merged = dict(record('merged.nca', 'base'), data_version='13.0.5')
+        got = gamefiles.pick_program([merged, record('u12.nca', 'update', version=12 << 16)])
+        self.assertEqual(got['name'], 'merged.nca')
+        # (an update that is 13.0.5, or that doesn't say, still goes first)
+        got = gamefiles.pick_program([merged, record('u13.nca', 'update', version=2031616)])
+        self.assertEqual(got['name'], 'u13.nca')
+        got = gamefiles.pick_program([merged, record('program.nca', 'update')])
+        self.assertEqual(got['name'], 'program.nca')
+        older = dict(record('base.nca', 'base'), data_version='11.0.0')
+        self.assertEqual(gamefiles.pick_program([older, record('u12.nca', 'update', version=12 << 16)])['name'], 'u12.nca')
+
     def test_several_updates_without_versions(self):
         with self.assertRaises(gamefiles.Error):
             gamefiles.pick_program([record('a.nca', 'update'), record('b.nca', 'update')])
@@ -115,7 +132,7 @@ class MetadataTests(unittest.TestCase):
 
 class SummaryTests(unittest.TestCase):
     def test_lines(self):
-        contents = [record('base.nca', 'base'), record('update.nca', 'update', version=14 << 16),
+        contents = [record('base.nca', 'base'), record('update.nca', 'update', version=2031616),
                     record('dlc1.nca', 'dlc', type='data'), record('other.nca', 'base', app=OTHER)]
         contents[1]['display_version'] = '13.0.5'
         contents[2]['title_id'] = f'{APP + 0x1002:016X}'

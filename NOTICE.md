@@ -29,6 +29,13 @@ SDL3 is an external dependency: this repository contains no SDL source or binari
 
 `Install WindowSmash.bat` may put a copy of [Python](https://www.python.org/) (the embeddable package from python.org, under the [PSF license](https://docs.python.org/3/license.html)) into `deps/python`, with [pip](https://pip.pypa.io/) and the packages below, when the PC has no Python it can use. Nothing from it is distributed with WindowSmash.
 
+## The compiler: LLVM, and Microsoft's C runtime and Windows SDK
+
+`tools/msvc_deps.py` (which `Install WindowSmash.bat` and `launchers\Build WindowSmash.bat` run when the PC has no compiler) downloads two external dependencies onto the PC that builds the game. Neither is part of this repository or distributed with WindowSmash.
+
+- **LLVM** (`clang-cl`, `lld-link`, `llvm-lib` and clang's headers) into `deps/llvm`, from LLVM's official release on GitHub, under the [Apache License 2.0 with LLVM exceptions](https://llvm.org/LICENSE.txt).
+- **Microsoft's C runtime and Windows SDK** (headers and 64-bit libraries) into `deps/msvc`, from Microsoft's servers, under Microsoft's license terms for the Visual Studio Build Tools, which the tool shows and asks you to accept first. They are Microsoft's software, used to build the game on that PC; they are not for passing on. The game built with them links Microsoft's static C runtime, as it does when built with Visual Studio.
+
 ## Other external dependencies
 
 These are external dependencies, not bundled implementations. Their own licenses apply when you obtain, link or distribute them.

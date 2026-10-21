@@ -2,15 +2,17 @@
 """Compile the game's shaders ahead of time, into the renderer's disk cache.
 
 Usage:
-  shader_aot.py [--tree <dir>] [--jobs N] [--dry]
+  shader_aot.py [--jobs N] [--dry]
 
 The game's GPU programs are stored in data.arc as they are uploaded: in the effect files
-(.eff), the shader databases (.nushdb) and nested archives (.arc). This finds every program
-there (by its header word: 256-byte boundaries + 0x30 in effects and archives, 16-byte ones in
-databases), keeps one copy of each, pairs each pixel program with the vertex programs of its
-file (a vertex program's outputs are its pixel program's inputs), and has
-tools/shaderaot.c translate and compile them all into <tree>/dump/shadercache, exactly as the
-renderer would: a program's first use in the game then loads its DXBC instead of compiling it.
+(.eff), the shader databases (.nushdb) and nested archives (.arc); a few more are built into the
+game's main executable (dump/modules/main.reloc.bin). This finds every program there (by its
+header word: 256-byte boundaries + 0x30 in effects and archives, 8-byte ones in databases - half
+of a database's programs start 8 bytes past a 16-byte one - and 16-byte ones in the executables),
+keeps one copy of each, pairs each pixel program with the vertex programs of its file (a vertex
+program's outputs are its pixel program's inputs), and has tools/shaderaot.c translate and
+compile them all into dump/shadercache, exactly as the renderer would: a program's first
+use in the game then loads its DXBC instead of compiling it.
 
 The files are dated 2001-01-01 until the game first uses them, so the start's prewarm only
 makes the shaders the game has used. Programs with indirect branches are left out (their key
@@ -72,40 +74,113 @@ def containers(arc):
     return out
 
 
-def find_programs(arc):
-    """Distinct programs: list of [stage, bytes, set of paired vertex program ids]."""
+READ_TRIES = 3          # a read the disk fails is tried this many times (a flaky SD card can manage the next)
+READ_GIVE_UP = 10       # this many files running that the disk can't read: it has stopped answering
+
+
+class DiskGone(Exception):
+    """The disk fails every read (taken out, unmounted, failing): no point going on."""
+
+
+def read_retried(arc, off, size, pause=0.5):
+    """arc.read, tried again after a disk's read error; the error once every try failed."""
+    for attempt in range(READ_TRIES):
+        try:
+            return arc.read(off, size)
+        except OSError:
+            if attempt == READ_TRIES - 1:
+                raise
+            time.sleep(pause)
+
+
+# the first two bytes of every word is_header takes (the second's top bits are flags: MRT, kills pixels)
+HEADER_START = re.compile(rb"\x61[\x04\x44\x84\xc4]|\x62[\x14\x54\x94\xd4]")
+
+
+def add_file(programs, ids, data, step, start):
+    """The programs in one file's bytes (at start + a multiple of step) into programs/ids, each
+    pixel program paired with every vertex program of the file: the one before it is right for
+    only about 60 % of the cache's pairs, the file's for about 95 % (the game has only a few dozen
+    distinct vertex output masks, so this stays small)."""
+    mv = memoryview(data)
+    at = [k for k in (m.start() for m in HEADER_START.finditer(data))
+          if k >= start and (k - start) % step == 0 and k < len(data) - 0x60 and is_header(int.from_bytes(mv[k:k + 4], "little"))]
+    here = ([], [])
+    for j, k in enumerate(at):
+        end = min(len(data), k + MAX_PROGRAM, at[j + 1] if j + 1 < len(at) else len(data))
+        blob = bytes(mv[k:end])
+        stage = 0 if blob[0] & 0x1F == 1 else 1
+        key = hashlib.blake2b(blob, digest_size=16).digest()
+        pid = ids.get(key)
+        if pid is None:
+            pid = ids[key] = len(programs)
+            programs.append([stage, blob, set()])
+        here[stage].append(pid)
+    for pid in here[1]:
+        programs[pid][2].update(here[0])
+
+
+MODULES = ("main", "sdk", "subsdk0")
+
+
+def module_images(tree):
+    """The game's executables as loaded (<tree>/dump/modules/<name>.reloc.bin) that are there: some
+    programs are built into main (the menus', the title's, the screen's own passes)."""
+    paths = [os.path.join(tree, "dump", "modules", name + ".reloc.bin") for name in MODULES]
+    return [p for p in paths if os.path.isfile(p)]
+
+
+def find_programs(arc, read_errors=None, pause=0.5, modules=()):
+    """Distinct programs: list of [stage, bytes, set of paired vertex program ids], and how many
+    files could not be read. A file the disk can't read is left out (its shaders compile when the
+    game first uses them, as without this tool); read_errors, a list, gets each such error.
+    modules: executables' images, scanned too (their programs on 16-byte boundaries; one that
+    isn't one - no end within MAX_PROGRAM - shaderaot leaves out)."""
     programs, ids = [], {}
-    unread = 0
+    unread, failing = 0, 0
+    for path in modules:
+        with open(path, "rb") as f:
+            add_file(programs, ids, f.read(), 16, 0)
     for ext, (off, stored, size, flags) in containers(arc):
         if not stored or not size:   # (an empty file - data.arc has a few, marked compressed: nothing in it)
             continue
-        data = arc.read(off, stored)
+        try:
+            data = read_retried(arc, off, stored, pause)
+            failing = 0
+        except OSError as e:
+            unread += 1
+            failing += 1
+            if read_errors is not None:
+                read_errors.append(e)
+            if failing >= READ_GIVE_UP:
+                raise DiskGone(e) from e
+            continue
         if flags & 3:
             try:
                 data = zstd_decompress(data)
             except Exception:
                 unread += 1
                 continue
-        step, start = (16, 0) if ext == "nushdb" else (256, 0x30)
-        mv = memoryview(data)
-        at = [k for k in range(start, len(data) - 0x60, step) if is_header(int.from_bytes(mv[k:k + 4], "little"))]
-        here = ([], [])
-        for j, k in enumerate(at):
-            end = min(len(data), k + MAX_PROGRAM, at[j + 1] if j + 1 < len(at) else len(data))
-            blob = bytes(mv[k:end])
-            stage = 0 if blob[0] & 0x1F == 1 else 1
-            key = hashlib.blake2b(blob, digest_size=16).digest()
-            pid = ids.get(key)
-            if pid is None:
-                pid = ids[key] = len(programs)
-                programs.append([stage, blob, set()])
-            here[stage].append(pid)
-        # a pixel program is paired with every vertex program of its file: the one before it
-        # is right for only about 60 % of the cache's pairs, the file's for about 95 % (the
-        # game has only a few dozen distinct vertex output masks, so this stays small)
-        for pid in here[1]:
-            programs[pid][2].update(here[0])
+        step, start = (8, 0) if ext == "nushdb" else (256, 0x30)
+        add_file(programs, ids, data, step, start)
     return programs, unread
+
+
+def read_error_text(errors, tree=None):
+    """What to say about the files the disk could not read."""
+    files = list(dict.fromkeys(e.filename for e in errors if getattr(e, "filename", None)))
+    why = errors[0].strerror or str(errors[0])
+    lines = [f"The disk could not read {len(errors)} of the game's files ({why}"
+             + (f", in {', '.join(files)}" if files else "") + "). Their shaders are left out: they compile when the game "
+             "first uses them, as they would without this. The rest go ahead.",
+             "A read error comes from the disk itself: most often an SD card or drive that is failing or not seated "
+             "well, or a damaged copy of that file. The game can stop with the same error when it needs those files."]
+    dump = os.path.join(os.path.abspath(tree or ROOT), "dump") + os.sep
+    if any(os.path.abspath(f).startswith(dump) for f in files):
+        lines.append("That file is a copy WindowSmash made: delete it and run the installer again to make it afresh.")
+    if LINUX:
+        lines.append("The system's own record of the error: sudo dmesg | grep -i error")
+    return "\n".join(lines)
 
 
 def write_pack(programs, path):
@@ -129,7 +204,7 @@ def build_tool(exe):
         build_tool_linux(exe, sources)
         return
     import cc
-    r = subprocess.run([cc.CLANG, "/nologo", "/O2", *cc.CFLAGS, *sources, "/Fe" + exe, "/link", "d3dcompiler.lib"],
+    r = subprocess.run([cc.CLANG, "/nologo", "/O2", *cc.LINK_FLAGS, *cc.CFLAGS, *sources, "/Fe" + exe, "/link", *cc.LINK_OPTIONS, "d3dcompiler.lib"],
                        capture_output=True, text=True, cwd=os.path.dirname(exe))
     if r.returncode:
         raise SystemExit("cannot build shaderaot:\n" + (r.stdout + r.stderr)[-3000:])
@@ -176,17 +251,24 @@ def low_priority():
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[1])
-    ap.add_argument("--tree", default=ROOT, help="the game version's folder (default: the port's own)")
     ap.add_argument("--jobs", type=int, default=default_jobs())
     ap.add_argument("--dry", action="store_true")
     a = ap.parse_args()
-    tree = os.path.abspath(a.tree)
+    tree = ROOT
     t0 = time.time()
     arc = A.Arc(os.path.join(tree, "dump", "modules", "romfs.cfg"))
-    programs, unread = find_programs(arc)
+    read_errors = []
+    try:
+        programs, unread = find_programs(arc, read_errors, modules=module_images(tree))
+    except DiskGone as e:
+        raise SystemExit(f"\nThe disk stopped answering: {READ_GIVE_UP} of the game's files running could not be read "
+                         f"({e}). Check that it is still there (an SD card that came loose, a drive that went to sleep), "
+                         "then run this again: what is done stays done.")
     nvs = sum(1 for p in programs if p[0] == 0)
     print(f"{len(programs)} distinct programs ({nvs} vertex, {len(programs) - nvs} pixel) in {time.time() - t0:.0f} s"
           + (f"; {unread} files could not be read" if unread else ""), flush=True)
+    if read_errors:
+        print(read_error_text(read_errors, tree), flush=True)
     work = os.path.join(tree, "dump", "aot")
     os.makedirs(work, exist_ok=True)
     pack = os.path.join(work, "programs.pack")

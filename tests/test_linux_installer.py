@@ -299,8 +299,11 @@ class BuildOnLinuxTests(unittest.TestCase):
         dump = top / 'port' / 'dump'
         (dump / 'exefs').mkdir(parents=True)
         (dump / 'modules').mkdir()
-        for n in ('main', 'main.npdm', 'rtld', 'sdk', 'subsdk0'):
+        for n in ('main.npdm', 'rtld', 'sdk', 'subsdk0'):
             (dump / 'exefs' / n).write_bytes(b'')
+        main = bytearray(0x100)   # (13.0.5's main module, as far as its header goes)
+        main[:4], main[0x40:0x54] = b'NSO0', bytes.fromhex('21450C647B8C5940ED5B68218EA128FD3C5D597D')
+        (dump / 'exefs' / 'main').write_bytes(main)
         self.vkd3d = top / 'build-vkd3d'
         self.calls = []
         self.ns = runpy.run_path(str(ROOT / 'tools/build_game.py'), run_name='build_game_linux')['build'].__globals__
@@ -372,6 +375,15 @@ class BuildOnLinuxTests(unittest.TestCase):
             self.assertEqual(self.ns['main'](), 1)
             self.ns['missing_fonts'] = lambda folder: ['x.bfttf']
             (modules / 'aoc.none').write_text('')
+            self.assertEqual(self.ns['main'](), 1)
+            self.ns['missing_fonts'] = lambda folder: []
+            self.assertEqual(self.ns['main'](), 0)
+            # a folder set up from another game version: not ready, so the installer asks for the
+            # game folder again (and the build sets it up again from 13.0.5's files)
+            main = Path(self.ns['EXEFS']) / 'main'
+            head = bytearray(main.read_bytes())
+            head[0x40:0x54] = bytes.fromhex('4A3F8ED7DCCE3AD4541A3A2F7622B5B57FC8A55C')   # (11.0.0's)
+            main.write_bytes(head)
             self.assertEqual(self.ns['main'](), 1)
 
 

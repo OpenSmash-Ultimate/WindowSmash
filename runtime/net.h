@@ -34,6 +34,9 @@ int net_configured(void);            /* netplay asked for (host or join) */
 int net_log(void);                   /* SSBU_NET_LOG */
 u32 net_local_ip(void);              /* this player's virtual address (host order), 0 until the relay gives one */
 const char *net_player_name(void);
+/* The lobby or relay this game joins (host[:port]): SSBU_NET_RELAY's, else online_server.txt's
+ * with --online; NULL when it hosts a private room or plays offline. */
+const char *net_relay_address(void);
 int net_unreachable(void);           /* asked for, but the relay has not answered for a while: offline */
 
 /* The online lobby: rooms are listed by the lobby, not found by their broadcasts. */

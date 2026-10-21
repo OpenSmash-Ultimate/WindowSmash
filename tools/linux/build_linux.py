@@ -6,16 +6,15 @@ Usage: build_linux.py [--port <dir>] [--out <dir>] [--jobs N] [--runtime-only] [
 
 The recompiled game is the C the Windows build already generated (tools/recomp.py writes it into
 <port>/build/{main,subsdk0,sdk,nro/*}); this compiles each file again for Linux, next to nothing
-of the Windows objects, into <out>/<module>/. <port> is a game tree: the port's own (dump/ and
-build/ at its top) or a game version's folder of the same layout, e.g. v13.0.5 - the default when
-it is built (toolchain.default_port). Files with exception landing sites (guest C++ try/catch) are
+of the Windows objects, into <out>/<module>/. <port> is a game tree, a folder with dump/ and
+build/ at its top: the port's own (toolchain.default_port). Files with exception landing sites (guest C++ try/catch) are
 compiled as C++ (see recomp.h). The runtime is runtime/*.c with the Linux platform layer
 (runtime/linux), and the program links against DXVK (Direct3D 11 on Vulkan), SDL2, vkd3d-shader
 (built by build_vkd3d.py), libopus and libvpx, the last three statically (on Linux, libopus and
 libvpx as the system has them). Built on Linux, the DXVK libraries go into <out>/lib, so the
 program runs from its own folder.
 Incremental: a file is compiled again when its source is newer than its object. <out> holds one
-tree's game (port.txt): build another tree's into another <out> (e.g. build-linux-11.0.0), or
+tree's game (port.txt): build another tree's into another <out>, or
 give --replace to start this one over. A progress bar shows how far it has got and the time left
 (tools/progress.py)."""
 import os
@@ -210,7 +209,7 @@ def runtime_jobs():
                                + f"    {{0, 0}}\n}};\nconst u32 hle_count = {len(names)};\n")
     if changed or needs(os.path.join(rt_out, "hle_table.o"), table, *headers):
         jobs.append((table, os.path.join(rt_out, "hle_table.o"), "-O1", RUNTIME_INCLUDES + RUNTIME_DEFINES))
-    # A wrapped function this game version has no module for: the original its wrapper names
+    # A wrapped function no module of this build has (a made-up game's): the original its wrapper names
     # (f_<address>_orig, which nothing reaches) is rt_wrap_missing. The Windows link says so
     # with /alternatename (tools/recomp.py); here it is a weak stub a module's own replaces.
     missing = os.path.join(GEN, "wrap_missing.c")

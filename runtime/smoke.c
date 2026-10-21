@@ -1,6 +1,6 @@
 /* First end-to-end check: run recompiled game code natively and verify its result.
  *
- * Target: main+0x256c220, an animation lookup. Given (this, const char *name) it computes
+ * Target: main+0x25ee6c0 (13.0.5; 11.0.0's main+0x256c220), an animation lookup. Given (this, const char *name) it computes
  * hash40(lowercase(name) + ".nuanmb") and returns that hash if the table at this+0x10..0x18
  * (16-byte entries, hash at +8) contains it, else 0. The expected hashes below come from an
  * independent bitwise CRC-32, not from anything in the game image. */
@@ -71,7 +71,7 @@ int main(int argc, char **argv) {
 
     size_t stack_size = 1 << 20;
     u8 *stack = malloc(stack_size);
-    GuestFn *lookup_anim = rt_lookup(BASE + 0x256c220);
+    GuestFn *lookup_anim = rt_lookup(BASE + 0x25ee6c0);
     int failures = 0;
     for (size_t i = 0; i < sizeof cases / sizeof *cases; i++) {
         Cpu cpu = {0};

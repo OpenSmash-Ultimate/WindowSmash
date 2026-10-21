@@ -89,7 +89,10 @@ HLE(_ZN2nn4time8FinalizeEv) { c->x[0] = 0; }
 HLE(_ZN2nn4time13IsInitializedEv) { c->x[0] = 1; }
 HLE(_ZN2nn4time23StandardUserSystemClock14GetCurrentTimeEPNS0_9PosixTimeE) { st64(c->x[0], (u64)time(NULL)); c->x[0] = 0; }
 HLE(_ZN2nn4time26StandardNetworkSystemClock14GetCurrentTimeEPNS0_9PosixTimeE) { st64(c->x[0], (u64)time(NULL)); c->x[0] = 0; }
-HLE(_ZN2nn4time19StandardSteadyClock3nowEv) { steady_point(c->x[8]); }   /* 24-byte result: returned through x8 */
+/* The std::chrono-style clock: its time_point is the seconds alone, an 8-byte value returned in x0
+ * (the SDK keeps the whole SteadyClockTimePoint in its own frame). Callers leave x8 as it was, so
+ * writing a point there overwrote whatever x8 pointed at (the Spirit Board's data: a crash). */
+HLE(_ZN2nn4time19StandardSteadyClock3nowEv) { c->x[0] = (u64)steady_seconds(); }
 HLE(_ZN2nn4time14ToCalendarTimeEPNS0_12CalendarTimeEPNS0_22CalendarAdditionalInfoERKNS0_9PosixTimeE) {
     calendar(c->x[0], c->x[1], (i64)ld64(c->x[2]));
     c->x[0] = 0;

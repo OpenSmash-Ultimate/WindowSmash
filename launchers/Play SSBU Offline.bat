@@ -8,10 +8,8 @@ set "SSBU_NET_BIND="
 set "SSBU_NET_ROOM="
 set "SSBU_NET_NAME="
 @echo off
-rem Starts the native Super Smash Bros. Ultimate offline (Play SSBU.bat plays online). Every game
-rem version built here has a folder of its own with its own save (the port's folder: build\, save\;
-rem others: v13.0.5\ and so on - see docs\VERSIONS.md); with more than one, this asks which to
-rem start. Its log goes to <version folder>\build\play.log.
+rem Starts the native Super Smash Bros. Ultimate offline (Play SSBU.bat plays online). Its log goes
+rem to build\play.log.
 cd /d "%~dp0.."
-call tools\pick_version.bat || (pause & exit /b 1)
-start "SSBU log" /min cmd /c "%SSBU_TREE%\build\ssbu.exe %SSBU_TREE%\dump\modules --status 30 > %SSBU_TREE%\build\play.log 2>&1"
+if not exist build\ssbu.exe (echo The game isn't built here yet: run Install WindowSmash.bat. & pause & exit /b 1)
+start "SSBU log" /min cmd /c "build\ssbu.exe dump\modules --status 30 > build\play.log 2>&1"

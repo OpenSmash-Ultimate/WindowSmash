@@ -39,3 +39,5 @@ void gfx_gpu_unmapped(u64 va, u64 size);
 void gfx_guest_unmapped(u64 addr, u64 size);
 int gfx_draw_logging(void);   /* a frame's draws are being logged (debugging) */
 void *gfx_window_handle(void);   /* the game's window (an HWND), to own dialogs */
+void gfx_status_lines(void);   /* (host.c's [status]) the back end's own lines, if any */
+void gfx_closing(void);        /* the game is about to end (Direct3D: see gpu_d3d11.c's "first draws") */

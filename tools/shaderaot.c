@@ -4,7 +4,9 @@
  *
  * Usage: shaderaot <pack> <cache dir> <part> <parts> [--dry] [--keys <file>]
  *   Every process translates all vertex programs (their outputs are the paired pixel programs'
- *   inputs) and compiles the records whose index is <part> modulo <parts>. --dry translates only
+ *   inputs) and compiles the keys that are <part> modulo <parts> - by the key, not by where the
+ *   program is in the pack (the same program is often packed more than once): each key is one
+ *   part's, so the parts' counts add up to the distinct shaders. --dry translates only
  *   and prints the cache key of each program ("vs <hash>", "ps <hash> <vs outputs>"); --keys
  *   compiles only the keys listed in a file of such lines. On stderr, "progress <done> <of>" lines
  *   say how far it is, in keys, and a last line what it did.
@@ -36,6 +38,7 @@
 #include "../runtime/gpu_shader_cache.h"
 
 u32 shader_size(const u8 *program, u32 max);
+#define MAX_SIZE 0x40000   /* (what the renderer reads of a program at most) */
 
 static jmp_buf on_fatal;
 static char fatal_text[256];
@@ -137,30 +140,38 @@ static void compile_to(const char *hlsl, const char *name, int stage, const char
 /* Sets of keys: the ones this process has seen (the same program is often packed more than
  * once), and --keys' list. */
 typedef struct KeySet { u64 *slot; u32 cap; } KeySet;
-static KeySet seen = {0, 1u << 17}, only = {0, 1u << 16}, counted = {0, 1u << 17};
+static KeySet seen = {0, 1u << 18}, only = {0, 1u << 18}, counted = {0, 1u << 18};
+/* (a slot holds its key, 0 marks it free: key 0 is kept as another value. Not key | 1, which made
+   keys differing in bit 0 one - a pixel program's for vertex outputs 0x2 and 0x3, say - so one of
+   them was never compiled, and which one depended on how the keys were split between parts) */
+static u64 slot_key(u64 key) { return key ? key : 0x9E3779B97F4A7C15ull; }
 static int add_key(KeySet *ks, u64 key) {   /* 1 if it was not there */
     if (!ks->slot) ks->slot = calloc(ks->cap, sizeof *ks->slot);
-    u64 k = key | 1;
+    u64 k = slot_key(key);
     for (u32 i = (u32)(k * 0x9E3779B97F4A7C15ull >> 47) & (ks->cap - 1);; i = (i + 1) & (ks->cap - 1)) {
         if (ks->slot[i] == k) return 0;
         if (!ks->slot[i]) { ks->slot[i] = k; return 1; }
     }
 }
 static int has_key(const KeySet *ks, u64 key) {
-    u64 k = key | 1;
+    u64 k = slot_key(key);
     for (u32 i = (u32)(k * 0x9E3779B97F4A7C15ull >> 47) & (ks->cap - 1);; i = (i + 1) & (ks->cap - 1)) {
         if (ks->slot[i] == k) return 1;
         if (!ks->slot[i]) return 0;
     }
 }
-static int first_time(u64 key) { return add_key(&seen, key) && (!only.slot || has_key(&only, key)); }
+static u32 part, parts;
+static int ours(u64 key) { return key % parts == part; }   /* (a key is one part's) */
+static int first_time(u64 key) { return ours(key) && add_key(&seen, key) && (!only.slot || has_key(&only, key)); }
 /* the same, ahead of the compiling: for counting the keys to do (seen in the same order) */
-static int to_count(u64 key) { return add_key(&counted, key) && (!only.slot || has_key(&only, key)); }
+static int to_count(u64 key) { return ours(key) && add_key(&counted, key) && (!only.slot || has_key(&only, key)); }
 
 int main(int argc, char **argv) {
     if (argc < 5) { fprintf(stderr, "usage: shaderaot <pack> <cache dir> <part> <parts> [--dry]\n"); return 2; }
     const char *dir = argv[2];
-    u32 part = (u32)atoi(argv[3]), parts = (u32)atoi(argv[4]);
+    part = (u32)atoi(argv[3]);
+    parts = (u32)atoi(argv[4]);
+    if (!parts || part >= parts) { fprintf(stderr, "bad part %u of %u\n", part, parts); return 2; }
     int dry = 0;
     for (int a = 5; a < argc; a++) {
         if (!strcmp(argv[a], "--dry")) dry = 1;
@@ -208,36 +219,42 @@ int main(int argc, char **argv) {
     for (u32 i = 0; i < total; i++) {
         Program *p = &prog[i];
         if (p->stage != SHADER_VERTEX || p->length <= 0x50) continue;
-        if (setjmp(on_fatal)) { count.translate_failed++; continue; }
+        if (setjmp(on_fatal)) { count.translate_failed += part == 0; continue; }   /* (every part translates them: counted once) */
         p->size = shader_size(p->bytes, p->length);
-        if (p->size <= 0x50) continue;
+        if (p->size <= 0x50 || p->size >= MAX_SIZE) continue;   /* (no end found: not a program) */
         p->hash = shader_cache_hash(shader_program_hash(p->bytes, p->size), p->bytes, p->size, SHADER_VERTEX);
         char *hlsl = translate(p, 0, &info);
-        if (!hlsl) { count.translate_failed++; continue; }
+        if (!hlsl) { count.translate_failed += part == 0; continue; }
         free(hlsl);
         p->ok = 1;
         p->outputs = info.outputs;
         p->ntables = info.ntables;
-        p->mine = i % parts == part && first_time(p->hash * 3);
+        p->mine = first_time(p->hash * 3);
         progress_of += p->mine;
     }
-    /* this part's pixel programs: one key per distinct output mask of their vertex programs */
-    for (u32 i = part; i < total; i += parts) {
+    /* the pixel programs' keys, this part's counted: one per distinct output mask of their vertex
+       programs (or, with none, what the program reads) */
+    for (u32 i = 0; i < total; i++) {
         Program *p = &prog[i];
         if (p->stage != SHADER_PIXEL || p->length <= 0x50) continue;
-        if (setjmp(on_fatal)) { count.translate_failed++; continue; }
+        if (setjmp(on_fatal)) { count.translate_failed += part == 0; continue; }
         p->size = shader_size(p->bytes, p->length);
-        if (p->size <= 0x50) continue;
+        if (p->size <= 0x50 || p->size >= MAX_SIZE) continue;   /* (no end found: not a program) */
         p->hash = shader_cache_hash(shader_program_hash(p->bytes, p->size), p->bytes, p->size, SHADER_PIXEL);
         p->nmasks = pixel_masks(p, prog, total);
+        if (!p->nmasks) {   /* no vertex program known: what it reads */
+            char *probe = translate(p, 0xFFFFFFFFu, &info);
+            if (!probe) { count.translate_failed += ours(p->hash); p->size = 0; continue; }
+            free(probe);
+            p->masks[p->nmasks++] = info.inputs;
+        }
         for (u32 m = 0; m < p->nmasks; m++) progress_of += to_count(p->hash * 5 ^ p->masks[m]);
-        if (!p->nmasks) progress_of++;   /* (its one key: what it reads, found when it is compiled) */
     }
     fprintf(stderr, "progress 0 %u\n", progress_of);   /* (the total, before the first compile) */
     fflush(stderr);
-    /* this part's programs, in the pack's order: vertex and pixel ones come mixed, so the pace
-       stays even and the time left holds from the start. A pixel program: once per mask. */
-    for (u32 i = part; i < total; i += parts) {
+    /* this part's keys, in the pack's order: vertex and pixel ones come mixed, so the pace stays
+       even and the time left holds from the start. A pixel program: once per mask. */
+    for (u32 i = 0; i < total; i++) {
         Program *p = &prog[i];
         if (p->stage == SHADER_VERTEX && p->mine) {
             progress();
@@ -254,24 +271,15 @@ int main(int argc, char **argv) {
             continue;
         }
         if (p->stage != SHADER_PIXEL || p->size <= 0x50) continue;
-        u32 masks[16], nmasks = p->nmasks;
-        memcpy(masks, p->masks, sizeof masks);
-        if (!nmasks) {   /* no vertex program known: what it reads */
-            char *probe = translate(p, 0xFFFFFFFFu, &info);
-            if (!probe) { count.translate_failed++; progress(); continue; }
-            free(probe);
-            masks[nmasks++] = info.inputs;
-        }
-        for (u32 m = 0; m < nmasks; m++) {
-            int first = first_time(p->hash * 5 ^ masks[m]);
-            if (first || !p->nmasks) progress();   /* (a key counted ahead: every first one, and a probed one) */
-            if (!first) continue;
+        for (u32 m = 0; m < p->nmasks; m++) {
+            if (!first_time(p->hash * 5 ^ p->masks[m])) continue;
+            progress();
             count.keys++;
             snprintf(name, sizeof name, "ps_%016llx", (unsigned long long)p->hash);
-            shader_cache_file(path, sizeof path, dir, SHADER_PIXEL, p->hash, masks[m], 0);
-            if (dry) { printf("ps %016llx %08x\n", (unsigned long long)p->hash, masks[m]); continue; }
+            shader_cache_file(path, sizeof path, dir, SHADER_PIXEL, p->hash, p->masks[m], 0);
+            if (dry) { printf("ps %016llx %08x\n", (unsigned long long)p->hash, p->masks[m]); continue; }
             if (exists(path)) { count.existing++; continue; }
-            char *hlsl = translate(p, masks[m], &info);
+            char *hlsl = translate(p, p->masks[m], &info);
             if (!hlsl) { count.translate_failed++; continue; }
             if (info.ntables) count.tables++;
             else compile_to(hlsl, name, SHADER_PIXEL, path);

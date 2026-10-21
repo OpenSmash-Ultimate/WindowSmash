@@ -9,7 +9,7 @@ libraries, the module images, fonts, the add-on content list and shader cache fr
 tree's dump/, a copy of its save (unless --no-save), the launchers (run.sh goes online: the
 lobby is in online_server.txt), the guides and the unlock tool. <port>
 is the tree the build was made from (its port.txt; see build_linux.py), and a package holds one
-tree's game: package another tree's into another <out> (e.g. dist-linux-11.0.0), or give
+tree's game: package another tree's into another <out>, or give
 --replace to start this one over - never one the game was played from. The game's RomFS stays
 in the files it is read from on Windows (romfs.cfg: an NCA, or for an update the base's NCA and
 the update's romfs_patch.bin, pieced together by the layer map the package carries); the
@@ -173,7 +173,7 @@ def main():
                 out.write(text)
     # the guides, laid out as in the repository (the launchers' messages point at docs/...), and
     # online_server.txt: the online lobby run.sh joins
-    for doc in ("LINUX.md", "MULTIPLAYER.md", "DLC-AND-UNLOCKS.md", "UPDATES.md", "VERSIONS.md"):
+    for doc in ("LINUX.md", "MULTIPLAYER.md", "DLC-AND-UNLOCKS.md", "UPDATES.md"):
         copy(os.path.join(REPO, "docs", doc), os.path.join(BUNDLE, "docs", doc))
     if os.path.exists(os.path.join(REPO, "online_server.txt")):
         copy(os.path.join(REPO, "online_server.txt"), os.path.join(BUNDLE, "online_server.txt"))

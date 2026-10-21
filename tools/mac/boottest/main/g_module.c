@@ -43,7 +43,8 @@ static const RtReloc relocs[] = {
     {0, 0, 0}
 };
 
+/* (13.0.5's build id: the runtime starts no other main module - runtime/host.c game_version_ok) */
 const RtModule rt_module_main = {
     "main", 0x7100000000ull, 0x20000ull, 0x8000ull, 0x7100000100ull,
-    funcs, 10, exports, 2, imports, import_weak, 4, relocs, 4, "B007A1A",
+    funcs, 10, exports, 2, imports, import_weak, 4, relocs, 4, "21450C647B8C5940ED5B68218EA128FD3C5D597D",
 };

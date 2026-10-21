@@ -19,15 +19,17 @@
 # This PC's settings, written on the first start (docs/PLAYING.md)
 /controllers.ini
 /display.ini
+/launcher.ini
+/online_direct.txt
 # Crash, freeze and stop reports with their minidumps (docs/PLAYING.md)
 /reports/
 # Third-party packages as downloaded (SDL3 for controllers: docs/BUILDING.md)
 /deps/
-# A game version's own folder (tools/install_version.py, tools/update.py --tree), laid out like
-# the above; and what the versions share or record on this PC (docs/VERSIONS.md)
+# The game version this folder was built from (tools/build_game.py); and what WindowSmash before
+# 13.0.5 only made: game version folders, the modules they shared, the version picked last
+/version.txt
 /v[0-9]*/
 /module_bases.txt
-/version.txt
 /last_version.txt
 # Linux build outputs (tools/linux)
 /build-linux*/

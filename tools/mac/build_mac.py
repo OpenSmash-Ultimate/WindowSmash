@@ -6,9 +6,9 @@ Usage: build_mac.py [--port <tree>] [--out <dir>] [--jobs N] [--runtime-only] [-
 
 The recompiled game is the C tools/recomp.py generates into <tree>/build/{main,subsdk0,sdk,nro/*}
 (recomp.py all --generate-only); this compiles it, with the runtime, into <out> (default
-<tree>/build-mac). <tree> is a game tree: the port's own (dump/ and build/ at its top, the
-default) or a game version's folder of the same layout, e.g. v13.0.5, so each version has a
-program of its own, as each has its build\\ssbu.exe on Windows. Files with exception landing
+<tree>/build-mac). <tree> is a game tree, a folder with dump/ and build/ at its top: the port's
+own (the default), or another laid out the same way (tools/mac/boottest's made-up game). Files
+with exception landing
 sites (guest C++ try/catch) are compiled as C++ (see recomp.h). The runtime is runtime/*.c without
 the Direct3D 11 renderer, the POSIX parts of the Linux platform layer (runtime/linux) and the
 macOS one (runtime/macos: memory, fibers, window, the Metal renderer); it links against
@@ -21,7 +21,8 @@ whole; <out>/ssbu.syms names its functions for the profiler.
   <out>/codecs/    libopus.a, libvpx.a
 Incremental: a file is compiled again when its source is newer than its object, and a game object
 also when its C is not the file it was compiled from (obj/game_sources.tsv records each one's size
-and time: a tree's module dir can be filled with another tree's older C, tools/modcache.py) or the
+and time: a module dir can hold older C than its objects, as one an earlier WindowSmash filled
+with another folder's did) or the
 game's compile command changed (the runtime's: obj/rt/cflags.txt). <out> holds one tree's game
 (port.txt; a tree's own build-mac goes with it when the tree is moved or copied): build another
 tree's into another <out>, or give --replace to start this one over (also this tree's own)."""
@@ -176,9 +177,9 @@ def game_command():
 
 def source_id(path):
     """What tells one version of a generated file from another: its size and time, to the second
-    (as kept by a copy to a disk that keeps times to the second). A file another tree's module dir
-    lent (modcache.adopt: a hard link, or a copy with its times) can be older than this tree's
-    objects, so being newer than the object is not enough."""
+    (as kept by a copy to a disk that keeps times to the second). A file of a module dir an earlier
+    WindowSmash filled from another folder's (a hard link, or a copy with its times) can be older
+    than the folder's objects, so being newer than the object is not enough."""
     st = os.stat(path)
     return f"{st.st_size}\t{int(st.st_mtime)}"
 
@@ -299,7 +300,7 @@ def hle_table_text(names):
 
 
 def wrap_missing_text(addresses):
-    """A wrapped function this game version has no module for: the original its wrapper names
+    """A wrapped function no module of this build has (a made-up game's): the original its wrapper names
     (f_<address>_orig, which nothing reaches) is rt_wrap_missing. The Windows link says so with
     /alternatename (tools/recomp.py); here it is a weak stub a module's own replaces. Hidden, as
     everything is: an exported weak definition would have dyld look for others at every start."""

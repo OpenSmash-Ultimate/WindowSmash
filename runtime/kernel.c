@@ -61,7 +61,8 @@ static CRITICAL_SECTION klock;
 static KThread *threads[1024];
 static u32 nthreads;
 static KObject objects[4096];
-static Region regions[4096];
+#define REGIONS 16384
+static Region regions[REGIONS];
 static u32 region_count;
 static struct { u64 dst, src, size; } maps[1024];
 static u64 heap_size, tlr_next = KERNEL_BASE, next_thread_id = 1, wait_order;
@@ -117,20 +118,22 @@ static KObject *object_of(Cpu *c, u32 handle, int type) {
 }
 
 /* ---- memory map ------------------------------------------------------------------ */
-void kernel_add_region(u64 base, u64 size, u32 state, u32 perm) {
+/* The regions are sorted and apart. Memory the game maps and unmaps as it goes (heap, alias
+ * memory, stacks, thread-local regions) is merged with a neighbour of the same kind, as the
+ * console's kernel does: the game grows its pools a piece at a time, and with one region per
+ * piece a long session of matches ran out of them ("too many memory regions", ten minutes and
+ * ~90 fighters in). */
+static int merges(u32 state) { return state == GM_HEAP || state == GM_STACK || state == GM_TLS; }
+
+static u32 insert_region(u64 base, u64 size, u32 state, u32 perm) {
+    if (region_count == REGIONS) rt_fatal("kernel: too many memory regions");
     u32 i = region_count++;
-    if (region_count > 4096) rt_fatal("kernel: too many memory regions");
     for (; i > 0 && regions[i - 1].base > base; i--) regions[i] = regions[i - 1];
     regions[i] = (Region){base, size, state, perm};
+    return i;
 }
 
-static void remove_region(u64 base) {
-    for (u32 i = 0; i < region_count; i++)
-        if (regions[i].base == base) {
-            memmove(&regions[i], &regions[i + 1], (--region_count - i) * sizeof *regions);
-            return;
-        }
-}
+static void erase_region(u32 i) { memmove(&regions[i], &regions[i + 1], (--region_count - i) * sizeof *regions); }
 
 /* Forget [base, base + size): regions inside it go, regions straddling its ends are trimmed. */
 static void unmap_range(u64 base, u64 size) {
@@ -138,12 +141,33 @@ static void unmap_range(u64 base, u64 size) {
     for (u32 i = 0; i < region_count;) {
         Region r = regions[i];
         u64 rend = r.base + r.size;
-        if (rend <= base || r.base >= end || (r.state != GM_HEAP && r.state != GM_STACK)) { i++; continue; }
-        memmove(&regions[i], &regions[i + 1], (--region_count - i) * sizeof *regions);
-        if (r.base < base) kernel_add_region(r.base, base - r.base, r.state, r.perm);
-        if (rend > end) kernel_add_region(end, rend - end, r.state, r.perm);
+        if (rend <= base || r.base >= end || !merges(r.state)) { i++; continue; }
+        erase_region(i);
+        if (r.base < base) insert_region(r.base, base - r.base, r.state, r.perm);
+        if (rend > end) insert_region(end, rend - end, r.state, r.perm);
         i = 0;
     }
+}
+
+/* (also from the loader, outside system calls: the lock keeps QueryMemory's search off a
+ * half-moved table) */
+void kernel_add_region(u64 base, u64 size, u32 state, u32 perm) {
+    if (!size) return;
+    EnterCriticalSection(&klock);
+    if (!merges(state)) insert_region(base, size, state, perm);
+    else {
+        unmap_range(base, size);   /* (mapped again over itself: the new mapping is the one there) */
+        u32 i = insert_region(base, size, state, perm);
+        if (i + 1 < region_count && regions[i + 1].base == base + size && regions[i + 1].state == state && regions[i + 1].perm == perm) {
+            regions[i].size += regions[i + 1].size;
+            erase_region(i + 1);
+        }
+        if (i > 0 && regions[i - 1].base + regions[i - 1].size == base && regions[i - 1].state == state && regions[i - 1].perm == perm) {
+            regions[i - 1].size += regions[i].size;
+            erase_region(i);
+        }
+    }
+    LeaveCriticalSection(&klock);
 }
 
 static void query_memory(u64 info, u64 addr) {
@@ -171,6 +195,26 @@ static void query_memory(u64 info, u64 addr) {
     st32(info + 24, r.perm);
     st32(info + 28, 0);
     st64(info + 32, 0);
+}
+
+/* 8 bytes of guest memory at addr if a region holds them: 0 if that memory is not mapped (hle_fiber.c
+ * looks into fiber objects the game may have freed). Under the lock, so it cannot be unmapped
+ * between the look and the read. */
+int kernel_read64(u64 addr, u64 *out) {
+    int ok = 0;
+    EnterCriticalSection(&klock);
+    u32 i = 0, hi = region_count;
+    while (i < hi) {
+        u32 mid = (i + hi) / 2;
+        if (regions[mid].base + regions[mid].size <= addr) i = mid + 1;
+        else hi = mid;
+    }
+    if (i < region_count && regions[i].base <= addr && addr + 8 <= regions[i].base + regions[i].size && (regions[i].perm & 1)) {
+        *out = ld64(addr);
+        ok = 1;
+    }
+    LeaveCriticalSection(&klock);
+    return ok;
 }
 
 static void *commit(u64 at, u64 size, const char *what) {
@@ -464,7 +508,7 @@ void rt_svc(Cpu *c, u32 n) {
         u64 size = x[1];
         if (size > HEAP_LIMIT) { x[0] = R_OUT_OF_MEMORY; break; }
         if (size > heap_size) commit(HEAP_BASE + heap_size, size - heap_size, "the heap");
-        if (heap_size) remove_region(HEAP_BASE);
+        if (heap_size) unmap_range(HEAP_BASE, heap_size);
         heap_size = size;
         if (size) kernel_add_region(HEAP_BASE, size, GM_HEAP, 3);
         x[0] = R_OK; x[1] = HEAP_BASE;
@@ -488,7 +532,7 @@ void rt_svc(Cpu *c, u32 n) {
                 memcpy(G2H(maps[i].src), G2H(maps[i].dst), maps[i].size);
                 gpu_memory_unmapping(maps[i].dst, maps[i].size);   /* (queued GPU work and the renderer may read it) */
                 VirtualFree(G2H(maps[i].dst), maps[i].size, MEM_DECOMMIT);
-                remove_region(maps[i].dst);
+                unmap_range(maps[i].dst, maps[i].size);
                 maps[i].size = 0;
             }
         x[0] = R_OK;

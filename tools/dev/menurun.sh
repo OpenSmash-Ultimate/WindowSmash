@@ -3,7 +3,7 @@
 # and log frames' draws. Runs on a copy of the save (<tree>/build/testdata), so a game the user has
 # open is never written under.
 # Usage: tools/dev/menurun.sh <out dir> [seconds]   (SSBU_INPUT, SSBU_GFX_LOG_AT, ... from the environment;
-#        SSBU_TREE picks a game version's folder, e.g. v13.0.5 - the port's own by default;
+#        SSBU_TREE picks another folder laid out like this one - this one by default;
 #        SSBU_EXE picks the executable, <tree>/build/ssbu.exe by default)
 # Frames go to <out dir> (one a second), the log to <out dir>.log.
 out=$1

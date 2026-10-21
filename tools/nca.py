@@ -326,9 +326,11 @@ class RomfsImage:
         if lines and lines[0] == "layered":
             self.size, self.entries = read_layers(lines[1])
             self.at = [e[0] for e in self.entries]
-            self.sources = [open(p, "rb") for p in lines[2:]]
+            self.paths = lines[2:]
+            self.sources = [open(p, "rb") for p in self.paths]
         else:
             self.entries = None
+            self.paths = lines[:1]
             self.f = open(lines[0], "rb")
             self.base = int(lines[1])
 
@@ -338,8 +340,11 @@ class RomfsImage:
 
     def read(self, off, size):
         if self.entries is None:
-            self.f.seek(self.base + off)
-            return self.f.read(size)
+            try:
+                self.f.seek(self.base + off)
+                return self.f.read(size)
+            except OSError as e:   # (a disk's read error: named with its file, which the error itself doesn't say)
+                raise OSError(e.errno, e.strerror, self.paths[0]) from e
         out = bytearray()
         k = bisect.bisect_right(self.at, off) - 1
         while size > 0 and 0 <= k < len(self.entries):
@@ -350,8 +355,11 @@ class RomfsImage:
                 out += bytes(n)
             else:
                 f = self.sources[src]
-                f.seek(soff + (off - at))
-                out += f.read(n)
+                try:
+                    f.seek(soff + (off - at))
+                    out += f.read(n)
+                except OSError as e:
+                    raise OSError(e.errno, e.strerror, self.paths[src]) from e
             off += n
             size -= n
             k += 1

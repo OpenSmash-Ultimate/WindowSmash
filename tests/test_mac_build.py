@@ -1,6 +1,5 @@
 """The macOS build (tools/mac: toolchain.py, build_mac.py, make_overlay_font.m), build_game.py's macOS
-steps, the arm64 codec configuration (tools/codec_libs.py, third_party/libvpx/config-arm64) and the
-sharing of generate-only module dirs between game trees (tools/modcache.py). What needs a Mac -
+steps and the arm64 codec configuration (tools/codec_libs.py, third_party/libvpx/config-arm64). What needs a Mac -
 the Command Line Tools, SDL3.framework, Core Text, codesign - runs only on one; the rest anywhere,
 with the toolchain stood in for. No game files."""
 from pathlib import Path
@@ -236,9 +235,9 @@ class BuildMacTests(unittest.TestCase):
         self.assertIn('no record of the C its objects were compiled from: compiling all of it again', out.getvalue())
 
     def test_older_c_of_another_module(self):
-        """The C of another build of the module put in its place, older than the objects
-        (modcache.adopt: hard links keep the other tree's times): every file it changed is
-        compiled again, though none is newer than its object."""
+        """The C of another build of the module put in its place, older than the objects (as an
+        earlier WindowSmash's sharing between folders did: hard links keep the other folder's times):
+        every file it changed is compiled again, though none is newer than its object."""
         self.compile(self.ns['game_jobs']())
         main = self.tree / 'build' / 'main'
         old = time.time() - 7 * 86400
@@ -321,7 +320,7 @@ class BuildMacTests(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()):
             self.ns['use_tree']()
         self.assertEqual((out / 'port.txt').read_text().strip(), str(self.tree))
-        copied_from = self.top / 'v13.0.4'   # (this tree a copy of one that is still there: still its own build-mac)
+        copied_from = self.top / 'WindowSmash-before'   # (this tree a copy of one that is still there: still its own build-mac)
         (copied_from / 'build').mkdir(parents=True)
         write(out / 'port.txt', f'{copied_from}\n')
         with contextlib.redirect_stdout(io.StringIO()) as said:
@@ -695,8 +694,11 @@ class BuildOnMacTests(unittest.TestCase):
         dump = self.port / 'dump'
         (dump / 'exefs').mkdir(parents=True)
         (dump / 'modules').mkdir()
-        for n in ('main', 'main.npdm', 'rtld', 'sdk', 'subsdk0'):
+        for n in ('main.npdm', 'rtld', 'sdk', 'subsdk0'):
             (dump / 'exefs' / n).write_bytes(b'')
+        main = bytearray(0x100)   # (13.0.5's main module, as far as its header goes)
+        main[:4], main[0x40:0x54] = b'NSO0', bytes.fromhex('21450C647B8C5940ED5B68218EA128FD3C5D597D')
+        (dump / 'exefs' / 'main').write_bytes(main)
         self.calls, self.popens, self.logged = [], [], []
         self.ns = runpy.run_path(str(ROOT / 'tools/build_game.py'), run_name='build_game_mac')['build'].__globals__
         fake_subprocess = types.SimpleNamespace(**{k: getattr(subprocess, k) for k in dir(subprocess) if not k.startswith('_')})
@@ -878,104 +880,6 @@ class BuildGameMacTests(unittest.TestCase):
         self.assertIn('-fsyntax-only', extra)
         self.assertIn('The Command Line Tools (macOS SDK 15.4: /sdk) cannot compile the game\'s runtime', str(e.exception))
         self.assertIn('lodBias', str(e.exception))
-
-
-class InstallVersionTests(unittest.TestCase):
-    def test_program(self):
-        g = runpy.run_path(str(ROOT / 'tools/install_version.py'), run_name='install_version_test')['program'].__globals__
-        g['MACOS'] = True
-        self.assertEqual(g['program']('/t'), os.path.join('/t', 'build-mac', 'WindowSmash.app', 'Contents', 'MacOS', 'ssbu'))
-        g['MACOS'] = False
-        self.assertEqual(g['program']('/t'), os.path.join('/t', 'build', 'ssbu.exe'))
-
-
-# ---- modcache: generate-only trees share their C --------------------------------------------------
-class ModcacheGenerateOnlyTests(unittest.TestCase):
-    def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix='modcache-test-')
-        self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
-        self.g = runpy.run_path(str(ROOT / 'tools/modcache.py'), run_name='modcache_test')['find_built'].__globals__
-        self.g.update(ROOT=str(self.root), _built=None, ADOPT_C_ONLY=True)   # (as on macOS)
-        (self.root / 'dump').mkdir()
-
-    def module_dir(self, tree, fp='fp', stamp=True, obj=False, name='main', bid='ab' * 32, base=0x7100000000):
-        d = self.root / tree / 'build' / name if tree else self.root / 'build' / name
-        (self.root / tree / 'dump').mkdir(parents=True, exist_ok=True)
-        write(d / 'manifest.tsv', 'g0000.c\t1\t1\n')
-        write(d / 'g0000.c', '/* C */\n')
-        write(d / 'g_module.c', '#include "module.h"\n')
-        if stamp:
-            self.g['write_stamp'](str(d), bid, base, name, fp)
-        if obj:
-            write(d / 'g_module.obj', 'obj')
-        return d
-
-    def test_generate_only_adopted(self):
-        src = self.module_dir('v13.0.4')                                   # (C and its stamp, no objects)
-        found = self.g['find_built']('ab' * 32, 0x7100000000, str(self.root / 'v13.0.5' / 'build' / 'main'), 'fp')
-        self.assertEqual(found, str(src))
-        dst = self.root / 'v13.0.5' / 'build' / 'main'
-        linked, copied = self.g['adopt'](found, str(dst))
-        self.assertEqual(linked + copied, 4)
-        self.assertEqual(self.g['build_info'](str(dst)), ('ab' * 32, 0x7100000000, 'main', 'fp'))
-
-    def test_unfinished_not_adopted(self):
-        self.module_dir('v13.0.4', stamp=False)   # (being generated: its stamp is cleared until it is done)
-        self.assertIsNone(self.g['find_built']('ab' * 32, 0x7100000000, '/elsewhere', 'fp'))
-
-    def test_not_on_linux(self):
-        """Off macOS a dir with only its C is not lent: tools/linux/build_linux.py goes by the files'
-        times, which the C of another tree keeps, so it would link the objects compiled before."""
-        self.module_dir('v13.0.4')
-        compiled = self.module_dir('v13.0.3', obj=True)
-        self.g['ADOPT_C_ONLY'] = False
-        self.assertEqual(self.g['find_built']('ab' * 32, 0x7100000000, '/elsewhere', 'fp'), str(compiled))
-        self.g['_built'] = None
-        shutil.rmtree(compiled)
-        self.assertIsNone(self.g['find_built']('ab' * 32, 0x7100000000, '/elsewhere', 'fp'))
-        g = runpy.run_path(str(ROOT / 'tools/modcache.py'), run_name='modcache_platform')['find_built'].__globals__
-        self.assertEqual(g['ADOPT_C_ONLY'], sys.platform == 'darwin')
-
-    def test_adopted_c_compiled_again(self):
-        """The case of an update installed again into a version tree whose C another tree had made
-        before: tree U's main is generated (build id B); tree T's, of build id A, is compiled
-        after; T's game then becomes B and takes U's C (older than T's objects). build_mac.py
-        compiles all of it again rather than link A's objects with B's images."""
-        bid_a, bid_b = 'aa' * 32, 'bb' * 32
-        donor = self.module_dir('v13.0.5', bid=bid_b)                      # (U: generated a week ago)
-        week_ago = time.time() - 7 * 86400
-        for f in donor.iterdir():
-            os.utime(f, (week_ago, week_ago))
-        tree = self.root / 'v13.0.4'
-        mine = self.module_dir('v13.0.4', bid=bid_a)                        # (T: generated and compiled since)
-        write(mine / 'g0000.c', '/* main of build id A */\n')
-        for sub in ('subsdk0', 'sdk'):
-            self.module_dir('v13.0.4', bid=bid_a, name=sub)
-        ns = load_build_mac(['--port', str(tree)], stub_toolchain())
-        jobs = ns['game_jobs']()
-        later = time.time() + 3600
-        for j in jobs:
-            write(j[1])
-            os.utime(j[1], (later, later))
-            ns['record_compiled'](j)
-        self.assertEqual(ns['game_jobs'](), [])
-        found = self.g['find_built'](bid_b, 0x7100000000, str(mine), 'fp')   # (as recomp.py all does)
-        self.assertEqual(found, str(donor))
-        self.g['adopt'](found, str(mine))
-        self.assertEqual(self.g['build_info'](str(mine))[0], bid_b)
-        again = sorted(os.path.relpath(j[1], ns['OBJ']) for j in ns['game_jobs']())
-        self.assertEqual(again, [os.path.join('main', 'g0000.o'), os.path.join('main', 'g_module.o')])
-
-    def test_preference(self):
-        same_tools = self.module_dir('v13.0.3', fp='fp')
-        compiled = self.module_dir('v13.0.4', fp='fp', obj=True)
-        self.module_dir('v13.0.2', fp='old', obj=True)
-        self.assertEqual(self.g['find_built']('ab' * 32, 0x7100000000, '/elsewhere', 'fp'), str(compiled))
-        self.g['_built'] = None
-        shutil.rmtree(compiled)
-        self.assertEqual(self.g['find_built']('ab' * 32, 0x7100000000, '/elsewhere', 'fp'), str(same_tools))
-        self.assertIsNone(self.g['find_built']('cd' * 32, 0x7100000000, '/elsewhere', 'fp'))
 
 
 if __name__ == '__main__':

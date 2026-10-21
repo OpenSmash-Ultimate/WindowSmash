@@ -78,7 +78,7 @@ ICON = os.path.join(ROOT, "docs", "assets", "windowsmash.ico")
 LAUNCHERS = ["Install WindowSmash.command", "Play SSBU.command", "launchers/Play SSBU Offline.command",
              "launchers/Host SSBU Netplay.command", "launchers/Join SSBU Netplay.command",
              "launchers/Unlock All Fighters.command", "launchers/Build WindowSmash.command",
-             "tools/mac/launch.sh", "tools/mac/pick_version.sh"]
+             "tools/mac/launch.sh"]
 EMULATORS = ("yuzu", "eden", "sudachi", "citron", "suyu", "torzu")   # yuzu and the forks with its layout
 SSBU_TITLES = "01006a800016"   # (Super Smash Bros. Ultimate's title ids: the game's, its update's and DLC's)
 NAME_MAX = 32   # (as the Windows setup window's box)
@@ -860,7 +860,7 @@ class Checks:
 
 
 LABELS = {"game": "Game files", "keys": "Keys", "firmware": "Firmware"}
-PROMPTS = {"game": "Choose the folder with your game files: the game (.nsp, .xci or .nca files), its update and DLC.",
+PROMPTS = {"game": "Choose the folder with your game files: the game (.nsp, .xci or .nca files), its 13.0.5 update and DLC.",
            "keys": "Choose the folder with prod.keys and title.keys.",
            "firmware": "Choose the folder with your firmware: a few hundred .nca files."}
 
@@ -951,7 +951,7 @@ def terminal_answers(a, found, name, options, firewall, checks, interactive):
         found["firmware"] = ask("Firmware folder (.nca files)", found["firmware"], True)
     firmware = ask_folder("firmware", "firmware", found["firmware"], checks.firmware, interactive)
     if interactive and not a.game:
-        found["game"] = ask("Game folder (the game's .nca, .nsp or .xci files)", found["game"], True)
+        found["game"] = ask("Game folder (the game's .nca, .nsp or .xci files, with its 13.0.5 update)", found["game"], True)
     game = ask_folder("game", "game", found["game"], lambda p: checks.game(p, keys), interactive)
     if interactive and not a.online_name:
         try:

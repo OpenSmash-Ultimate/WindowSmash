@@ -1519,6 +1519,7 @@ typedef struct Kernel {
     u32 cb_size[18];
     u32 handles[8]; id<MTLTexture> tex[8]; id<MTLSamplerState> smp[8];
     u32 lod_bias[8];   /* (the sampler's, as the renderer passes it before macOS 26: 13 bits, 1/256ths) */
+    u32 scale[8];      /* (a render target's render scale, 4.12, as the renderer passes it: 0 for 1) */
     u32 ntex;
 } Kernel;
 
@@ -1571,6 +1572,7 @@ static int run_kernel(Kernel *k) {
         while (h < k->ntex && k->handles[h] != info.tex[t].handle_offset) h++;
         if (h == k->ntex) { printf("  no texture for handle %#x\n", info.tex[t].handle_offset); return 1; }
         params.swz[1][t] = 2 | 3 << 3 | 4 << 6 | 5 << 9 | (k->lod_bias[h] & 0x1FFF) << 12;   /* (x, y, z, w) */
+        params.sb[1][t >> 1][3] |= (k->scale[h] & 0xFFFF) << ((t & 1) * 16);
         [enc setTexture:k->tex[h] atIndex:t];
         if (t < shader_msl_samplers(&info)) [enc setSamplerState:k->smp[h] atIndex:t];
     }
@@ -1848,15 +1850,19 @@ static int gpu_tex(void) {
                 .handles = {H_2D, H_ARRAY, H_DEPTH, H_CUBE, H_3D, H_1D, H_UINT},
                 .tex = {t2, ta, td, tc, t3, t1, tuf}, .smp = {nearest, nearest, compare, nearest, nearest, nearest, nearest}, .ntex = 7};
     int before = failures;
-    /* three times: then with a LOD bias of -1 on the 2D texture's sampler, which moves the
+    /* four times: then with a LOD bias of -1 on the 2D texture's sampler, which moves the
      * explicit LOD 1 to 0 and leaves level 0's samples (clamped there), texel fetches and gathers
      * as they were; then with +1 on it and on the depth texture's, which moves level 0's samples
      * and compares - every sample outside a pixel shader's derivatives - to mip 1, as Direct3D's
-     * MipLODBias and Metal's own lodBias do, and the explicit LOD 1 to 2 (clamped to 1) */
-    static const char *const bias_name[3] = {"", " (LOD bias -1)", " (LOD bias +1)"};
-    for (int biased = 0; biased < 3; biased++) {
+     * MipLODBias and Metal's own lodBias do, and the explicit LOD 1 to 2 (clamped to 1); then with
+     * the 2D texture a render target drawn at render scale 2, whose texel offsets and numbers are
+     * the game's: twice as many of its own (sc) */
+    static const char *const bias_name[4] = {"", " (LOD bias -1)", " (LOD bias +1)", " (render scale 2)"};
+    for (int biased = 0; biased < 4; biased++) {
         k.lod_bias[0] = biased == 1 ? (u32)-256 : biased == 2 ? 256 : 0;
         k.lod_bias[2] = biased == 2 ? 256 : 0;
+        k.scale[0] = biased == 3 ? 2 * 4096 : 0;
+        i32 sc = biased == 3 ? 2 : 1;
         memset(out, 0xCD, sizeof out);
         if (run_kernel(&k)) return 1;
         for (u32 t = 0; t < T; t++) {
@@ -1872,19 +1878,20 @@ static int gpu_tex(void) {
             PUT4(4, biased == 1 ? t2d(tx, ty, 0) : t2d(tx >> 1, ty >> 1, 1));
             i32 ox = (i32)(t % 5) - 2, oy = (i32)(t % 3) - 1;
             if (biased == 2) PUT4(8, t2d((u32)clampi((i32)(tx >> 1) + ox, 0, 3), (u32)clampi((i32)(ty >> 1) + oy, 0, 3), 1));
-            else PUT4(8, t2d((u32)clampi((i32)tx + ox, 0, 7), (u32)clampi((i32)ty + oy, 0, 7), 0));
+            else PUT4(8, t2d((u32)clampi((i32)tx + sc * ox, 0, 7), (u32)clampi((i32)ty + sc * oy, 0, 7), 0));
             i32 ix = (i32)r[4], iy = (i32)r[5], mip = (i32)r[6];
-            PUT4(12, ix >= 0 && ix < 8 ? t2d((u32)ix, (u32)iy, 0) : Z4);
+            i32 hx = sc * ix, hy = sc * iy;   /* (the 2D texture's: at 2, texel v's centre is its 2v + 1, so 2v) */
+            PUT4(12, hx >= 0 && hx < 8 ? t2d((u32)hx, (u32)hy, 0) : Z4);
             i32 ms = 8 >> mip;
-            PUT4(16, ix >= 0 && ix < ms && iy < ms ? t2d((u32)ix, (u32)iy, (u32)mip) : Z4);
+            PUT4(16, hx >= 0 && hx < ms && hy < ms ? t2d((u32)hx, (u32)hy, (u32)mip) : Z4);
             PUT4(20, gather2d((i32)tx, (i32)ty, 0, 0, 0));
             i32 ox6 = 3 * (i32)t - 20, oy6 = 7 - (i32)t;
-            PUT4(24, gather2d((i32)tx, (i32)ty, ox6, oy6, 1));
+            PUT4(24, gather2d((i32)tx, (i32)ty, sc * ox6, sc * oy6, 1));
             for (u32 i = 0; i < 4; i++) {
                 i32 px = (i32)((t + i * 5) % 23) - 11, py = (i32)((t * 3 + i) % 19) - 9;
-                want[28 + i] = comp(gather2d((i32)tx, (i32)ty, px, py, 2), i);
+                want[28 + i] = comp(gather2d((i32)tx, (i32)ty, sc * px, sc * py, 2), i);
             }
-            PUT4(32, gather2d((i32)tx, (i32)ty, ox6, oy6, 3));
+            PUT4(32, gather2d((i32)tx, (i32)ty, sc * ox6, sc * oy6, 3));
             u32 l = r[12], ux = t & 3, uy = (t >> 2) & 3;
             PUT4(36, tarr(ux, uy, l < 3 ? l : 2));
             PUT4(40, ix >= 0 && ix < 4 && l < 3 ? tarr((u32)ix, (u32)iy, l) : Z4);
@@ -1919,7 +1926,8 @@ static int gpu_tex(void) {
             }
         }
     }
-    printf("gpu cs_tex: textures, 16 threads, without and with LOD biases -1 and +1: %s\n", failures == before ? "ok" : "FAILED");
+    printf("gpu cs_tex: textures, 16 threads, without and with LOD biases -1 and +1, and at render scale 2: %s\n",
+           failures == before ? "ok" : "FAILED");
     return failures != before;
 }
 

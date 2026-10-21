@@ -1,7 +1,6 @@
 #!/bin/bash
 # The macOS launchers' shared part: Play SSBU.command, launchers/*.command and the Play SSBU app the
-# installer makes (~/Applications) run it, as Play SSBU.bat, launchers\*.bat and tools\pick_version.bat
-# do on Windows.
+# installer makes (~/Applications) run it, as Play SSBU.bat and launchers\*.bat do on Windows.
 #
 #   launch.sh [--gui] play|offline|host|join|unlock|build [arguments for unlock_all.py or build_game.py]
 #
@@ -13,23 +12,21 @@
 #   offline  the game without going online
 #   host     the game as the host of a private room: it runs the relay the others join (UDP port
 #            39420, opened on the router with UPnP when the router allows it); the address to give
-#            them shows here, from <version folder>/netplay_address.txt, and in the overlay (F2)
+#            them shows here, from netplay_address.txt, and in the overlay (F2)
 #   join     the game joining a host's room (or a standalone relay, tools/ssbu_relay.py)
-#   unlock   tools/unlock_all.py on the picked version's save, with the game closed
+#   unlock   tools/unlock_all.py on the game's save, with the game closed
 #   build    tools/build_game.py with WindowSmash's Python (launchers\Build WindowSmash.bat)
 #
-# Every game version built here has a folder of its own with its own save (the port's: build-mac/,
-# save/; others: v13.0.5/ and so on - see docs/VERSIONS.md); with more than one, it asks which. Its
-# game is <version folder>/build-mac/WindowSmash.app, started with open (so macOS treats it as the app
-# it is: its own Dock icon, privacy permissions and Game Mode) from this folder, with the version's
-# dump/modules; its log goes to <version folder>/build/play.log, which the Terminal window shows as it
-# goes. --gui (the Play SSBU app): questions and messages in dialogs, and no log window.
+# The game is build-mac/WindowSmash.app, started with open (so macOS treats it as the app it is: its
+# own Dock icon, privacy permissions and Game Mode) from this folder, with dump/modules; its log goes
+# to build/play.log, which the Terminal window shows as it goes. --gui (the Play SSBU app): questions
+# and messages in dialogs, and no log window. SSBU_TREE names another folder laid out like this one
+# to start the game of instead (tools/mac/boottest's made-up game).
 # (Written for macOS's own bash, 3.2.)
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 root="$(cd "$here/../.." && pwd -P)"
 gui=0
-. "$here/pick_version.sh"
 
 # Something to say: in this window, or in a dialog (--gui)
 message() {
@@ -114,15 +111,21 @@ clear_net() {
     unset SSBU_DATA_ROOT SSBU_INPUT SSBU_NET_HOST SSBU_NET_RELAY SSBU_NET_BIND "$@"
 }
 
-# The version to start ($tree: its folder), built and with its game data where its romfs.cfg says
-pick_game() {
-    local cfg path
-    pick_version || { pause; exit 1; }
-    case "$SSBU_TREE" in
+# The folder of the game to start ($tree: this one, or SSBU_TREE's), with the game built in it
+game_folder() {
+    case "${SSBU_TREE:-.}" in
         .) tree=$root ;;
         /*) tree=$SSBU_TREE ;;
         *) tree="$root/$SSBU_TREE" ;;
     esac
+    [ -x "$tree/build-mac/WindowSmash.app/Contents/MacOS/ssbu" ] ||
+        fail "The game isn't built here yet: double-click Install WindowSmash.command (in $root) to build it."
+}
+
+# The game to start ($tree), built and with its game data where its romfs.cfg says
+pick_game() {
+    local cfg path
+    game_folder
     cfg="$tree/dump/modules/romfs.cfg"
     [ -f "$cfg" ] || fail "The game is not set up yet ($cfg is missing): double-click Install WindowSmash.command."
     while IFS= read -r path || [ -n "$path" ]; do
@@ -245,7 +248,7 @@ mode_host() {
     local i
     clear_net
     pick_game
-    say "Every player needs this same game version."
+    say "Every player needs game version 13.0.5, as you have."
     SSBU_NET_NAME=$(ask "Your player name" "${USER:-$(id -un)}") || exit 0
     SSBU_NET_ROOM=$(ask "Room name - the other players use the same one" smash) || exit 0
     SSBU_NET_PORT=$(ask "UDP port" 39420) || exit 0
@@ -277,7 +280,7 @@ mode_host() {
 mode_join() {
     clear_net
     pick_game
-    say "The host needs this same game version."
+    say "The host needs game version 13.0.5 too."
     SSBU_NET_RELAY=$(ask "Host's address (IP or IP:port, from the host's netplay_address.txt)" "") || exit 0
     [ -n "$SSBU_NET_RELAY" ] || fail "An address is needed - ask the host for theirs."
     SSBU_NET_NAME=$(ask "Your player name" "${USER:-$(id -un)}") || exit 0
@@ -308,12 +311,12 @@ tools_python() {
 mode_unlock() {
     local py status
     gui=0
-    pick_version || { pause; exit 1; }
+    game_folder
     tools_python
     if pgrep -x ssbu >/dev/null 2>&1; then
         fail "Close every SSBU game window before unlocking fighters, then run this again."
     fi
-    "$py" tools/unlock_all.py --tree "$SSBU_TREE" "$@"
+    "$py" tools/unlock_all.py --root "$tree" "$@"
     status=$?
     pause
     exit "$status"

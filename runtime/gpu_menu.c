@@ -25,6 +25,7 @@
 #include "settings.h"
 
 int gfx_window_focused(void);
+void gfx_closing(void);   /* (gpu_d3d11.c) the game is about to end */
 #ifdef _WIN32
 int gfx_adapter_names(char names[][64], int max);   /* (gpu_d3d11.c) the graphics cards, fastest first */
 #endif
@@ -75,7 +76,7 @@ enum { W_NONE, W_NOW, W_RESTART };
 enum {
     R_NONE, R_WINDOW, R_PACING, R_LATENCY, R_CURSOR, R_OVERLAY, R_SIZE, R_SCALE, R_GPU,
     R_PAD, R_PAD_PLAYER, R_PAD_LAYOUT, R_PAD_DEADZONE, R_PAD_RUMBLE, R_PAD_TRIGGER, R_PAD_REMAP, R_PAD_TEST, R_PAD_RESET,
-    R_KEYBOARD, R_BACKGROUND, R_PADS_FILE,
+    R_RUMBLE, R_KEYBOARD, R_BACKGROUND, R_PADS_FILE,
     R_NET_STATUS, R_NET_MODE, R_NET_CODE, R_NET_SERVER, R_NET_NAME, R_NET_DIRECT,
     R_RESTART, R_QUIT, R_REMAP_BACK, R_REMAP_FIRST = 100   /* + console button */
 };
@@ -263,13 +264,11 @@ static void build(void) {
 #endif
         snprintf(r->value, sizeof r->value, "%d x %d", ds.width, ds.height);
         note_env(r, "SSBU_WINDOW_SIZE");
-#ifndef __APPLE__   /* (the Metal renderer draws at the game's own 1920x1080) */
         r = add(R_SCALE, K_CHOICE, W_RESTART, "Render scale",
                 "How many times 1920x1080 the game draws at: sharper on a big screen, more work for the graphics card. Auto: as many pixels as the window has.");
         if (ds.render_scale <= 0) snprintf(r->value, sizeof r->value, "auto");
         else snprintf(r->value, sizeof r->value, "%g", ds.render_scale);
         note_env(r, "SSBU_RENDER_SCALE");
-#endif
 #ifdef _WIN32
         r = add(R_GPU, K_CHOICE, W_RESTART, "Graphics card", "Auto picks the fastest card (on a laptop, the NVIDIA or AMD one). Pick another to use it instead.");
         snprintf(r->value, sizeof r->value, "%s", ds.gpu);
@@ -308,6 +307,8 @@ static void build(void) {
                         snprintf(rows[i].note, sizeof rows[i].note, "[%.40s]", section);
             }
         }
+        r = add(R_RUMBLE, K_CHOICE, W_NOW, "Rumble", "On: controllers rumble, each as strong as its own Rumble setting. Off: no controller rumbles.");
+        snprintf(r->value, sizeof r->value, "%s", on_off(pad_rumble_on()));
         r = add(R_KEYBOARD, K_CHOICE, W_NOW, "Keyboard plays as",
                 "The keyboard adds to this player: arrows move, Z X C V are A B X Y, A S are L R, Q W are ZL ZR, Enter is +, I J K L the right stick.");
         if (pad_keyboard_slot() < 0) snprintf(r->value, sizeof r->value, "nobody");
@@ -517,6 +518,10 @@ static void change(const Row *row, int dir) {
         settings_ini_set(pad_ini_path(), "general", "background", pad_background() ? "0" : "1");
         pad_reload();
         break;
+    case R_RUMBLE:
+        settings_ini_set(pad_ini_path(), "general", "rumble", pad_rumble_on() ? "0" : "1");
+        pad_reload();
+        break;
     case R_NET_MODE:
         net.mode = cycle(net.mode, 4, dir);
         net_save_server();
@@ -677,7 +682,7 @@ static void event(int ev, unsigned ch) {
             int what = confirm;
             confirm = 0;
             if (what == R_RESTART) settings_restart();
-            else { fprintf(stderr, "[menu] quit\n"); fflush(stderr); ExitProcess(0); }
+            else { fprintf(stderr, "[menu] quit\n"); gfx_closing(); fflush(stderr); ExitProcess(0); }
         } else if (ev == EV_B || ev == EV_BKSP || ev == EV_ESC) confirm = 0;
         return;
     }

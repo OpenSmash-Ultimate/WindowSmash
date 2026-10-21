@@ -1,5 +1,5 @@
 """The macOS installer (Install WindowSmash.command, tools/mac/install_mac.py) and launchers
-(Play SSBU.command, launchers/*.command, tools/mac/launch.sh and pick_version.sh, the Play SSBU app the
+(Play SSBU.command, launchers/*.command, tools/mac/launch.sh, the Play SSBU app the
 installer makes). What decides is tested on any POSIX system with bash; what needs macOS (open,
 osacompile, hdiutil, sips, codesign) only on a Mac, where a stand-in game app records how it was
 started. No dialog is ever shown: osascript is stood in for. No game files."""
@@ -253,8 +253,8 @@ class UnlockTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix='unlock test ') as tmp:
             main = Path(tmp) / 'dump' / 'exefs' / 'main'
             main.parent.mkdir(parents=True)
-            main.write_bytes(b'NSO0' + bytes(0x3C) + bytes.fromhex('4A3F8ED7DCCE3AD4541A3A2F7622B5B57FC8A55C') + bytes(12))
-            r = subprocess.run([sys.executable, str(ROOT / 'tools' / 'unlock_all.py'), '--tree', tmp], capture_output=True,
+            main.write_bytes(b'NSO0' + bytes(0x3C) + bytes.fromhex('21450C647B8C5940ED5B68218EA128FD3C5D597D') + bytes(12))
+            r = subprocess.run([sys.executable, str(ROOT / 'tools' / 'unlock_all.py'), '--root', tmp], capture_output=True,
                                text=True, timeout=60)
         self.assertEqual(r.returncode, 1)
         self.assertNotIn('Traceback', r.stderr)
@@ -850,7 +850,7 @@ class BootstrapTests(unittest.TestCase):
 
 
 def make_tree(top, tree='.', version=None, data=True, built=True):
-    """A game version folder as a build leaves it, with a stand-in game app (when built) that records
+    """A game folder as a build leaves it, with a stand-in game app (when built) that records
     how it was started (to <top>/started.txt: its working folder, its arguments, the SSBU_ variables),
     writes a line to its log, and runs a second, so that open can wait for it."""
     t = Path(top) / tree
@@ -881,7 +881,7 @@ def make_tree(top, tree='.', version=None, data=True, built=True):
 def copy_launchers(top):
     for name in ('Play SSBU.command', 'launchers/Play SSBU Offline.command', 'launchers/Host SSBU Netplay.command',
                  'launchers/Join SSBU Netplay.command', 'launchers/Unlock All Fighters.command',
-                 'launchers/Build WindowSmash.command', 'tools/mac/launch.sh', 'tools/mac/pick_version.sh'):
+                 'launchers/Build WindowSmash.command', 'tools/mac/launch.sh'):
         (Path(top) / name).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT / name, Path(top) / name)
 
@@ -945,77 +945,30 @@ class LaunchScriptTests(unittest.TestCase):
         self.assertEqual(fake.calls, [])
         self.assertFalse((self.top / 'online_name.txt').exists())
 
-    def test_version_trees(self):
-        r = self.sh('list_trees')
-        self.assertEqual(r.stdout, '')
-        make_tree(self.top, '.', '11.0.0')
-        make_tree(self.top, 'v13.0.5', '13.0.5')
-        make_tree(self.top, 'v12 no data', '12.0.3', data=False)     # (no romfs.cfg: not ready)
-        make_tree(self.top, 'v9', '9.0.2', built=False)              # (not built)
-        make_tree(self.top, 'v8 no label')
-        (self.top / 'v8 no label' / 'build-mac' / 'WindowSmash.app' / 'Contents' / 'MacOS' / 'ssbu').chmod(0o644)  # (not runnable)
-        make_tree(self.top, 'v7', '7.0.1')
-        r = self.sh('list_trees')
-        self.assertEqual(r.stdout.splitlines(), ['.\t11.0.0  - build-mac/, save/', 'v13.0.5\t13.0.5  - v13.0.5/', 'v7\t7.0.1  - v7/'])
-        (self.top / 'v7' / 'version.txt').unlink()
-        self.assertEqual(self.sh('list_trees').stdout.splitlines()[2], 'v7\tv7  - v7/')
-
-    def pick(self, stdin='', env=None, gui=False):
-        r = self.sh('pick_version; echo "status=$? tree=$SSBU_TREE"', stdin, env, gui)
-        return r.stdout.splitlines()
-
-    def test_pick_version(self):
-        out = self.pick()
-        self.assertIn('No game version is built here yet: double-click Install WindowSmash.command', out[0])
-        self.assertEqual(out[-1], 'status=1 tree=')
-        make_tree(self.top, '.', '11.0.0')
-        self.assertEqual(self.pick(), ['Game version 11.0.0  - build-mac/, save/', 'status=0 tree=.'])   # (one: no question)
-        self.assertEqual((self.top / 'last_version.txt').read_text(), '.\n')
-        make_tree(self.top, 'v13.0.5', '13.0.5')
-        out = self.pick('\n')
-        self.assertEqual(out[:3], ['Game versions built here:', '  1. 11.0.0  - build-mac/, save/', '  2. 13.0.5  - v13.0.5/'])
-        self.assertEqual(out[-1], 'status=0 tree=.')                 # (last time's)
-        self.assertEqual(self.pick('x\n9\n2\n')[-4:], ['Type one of the numbers above.', 'Type one of the numbers above.',
-                                                        'Game version 13.0.5  - v13.0.5/', 'status=0 tree=v13.0.5'])
-        self.assertEqual((self.top / 'last_version.txt').read_text(), 'v13.0.5\n')
-        self.assertEqual(self.pick('\n')[-1], 'status=0 tree=v13.0.5')
-        (self.top / 'last_version.txt').write_text('V13.0.5\r\n')     # (as Windows wrote it)
-        self.assertEqual(self.pick('')[-1], 'status=0 tree=v13.0.5')
-        (self.top / 'last_version.txt').unlink()
-        self.assertEqual(self.pick('')[-1], 'status=0 tree=v13.0.5')  # (none: the last listed, as Windows)
-        self.assertEqual(self.pick('', {'SSBU_TREE': '.'}), ['status=0 tree=.'])   # (named beforehand: no question)
-        self.assertEqual(self.pick('1\n', {'SSBU_TREE': 'v9'})[-1], 'status=0 tree=.')   # (not built: asked)
-
-    def test_pick_version_dialog(self):
-        make_tree(self.top, '.', '11.0.0')
-        make_tree(self.top, 'v13.0.5', '13.0.5')
-        (self.top / 'last_version.txt').write_text('.\n')
-        fake = FakeOsascript(self, ['=13.0.5  - v13.0.5/', ''])
-        self.assertEqual(self.pick(env=fake.env, gui=True), ['status=0 tree=v13.0.5'])
-        self.assertEqual(fake.calls[0][0], ['Which game version?', '11.0.0  - build-mac/, save/', '11.0.0  - build-mac/, save/',
-                                            '13.0.5  - v13.0.5/'])
-        self.assertEqual(self.pick(env=fake.env, gui=True), ['status=1 tree='])   # (cancelled)
-
     def test_game_checks(self):
-        make_tree(self.top, '.', '11.0.0')
+        r = self.sh('pick_game; echo "not here"')
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("The game isn't built here yet: double-click Install WindowSmash.command", r.stdout)
+        self.assertNotIn('not here', r.stdout)
+        make_tree(self.top, '.', '13.0.5')
         r = self.sh('pick_game >/dev/null; echo "tree=$tree"')
         self.assertEqual(r.stdout.strip(), f'tree={self.top}')
-        make_tree(self.top, 'v13.0.5', '13.0.5')
-        r = self.sh('pick_game >/dev/null; echo "tree=$tree"', env={'SSBU_TREE': 'v13.0.5'})
-        self.assertEqual(r.stdout.strip(), f'tree={self.top}/v13.0.5')
+        other = make_tree(self.top, 'made-up game', '1.0.0')   # (SSBU_TREE: another folder, as tools/mac/boottest's)
+        r = self.sh('pick_game >/dev/null; echo "tree=$tree"', env={'SSBU_TREE': 'made-up game'})
+        self.assertEqual(r.stdout.strip(), f'tree={other}')
         (self.top / 'game data' / 'program.nca').unlink()
-        r = self.sh('pick_game; echo "not here"', env={'SSBU_TREE': 'v13.0.5'})
+        r = self.sh('pick_game; echo "not here"')
         self.assertEqual(r.returncode, 1)
         self.assertIn('The game data is not where it was when the game was built: ', r.stdout)
         self.assertNotIn('not here', r.stdout)
-        (self.top / 'v13.0.5' / 'dump' / 'modules' / 'romfs.cfg').write_text(
-            f'layered\n{self.top}/v13.0.5/dump/modules/romfs.layers\n{self.top}/base.nca\n')
-        for name in ('v13.0.5/dump/modules/romfs.layers', 'base.nca'):
+        (self.top / 'dump' / 'modules' / 'romfs.cfg').write_text(
+            f'layered\n{self.top}/dump/modules/romfs.layers\n{self.top}/base.nca\n')
+        for name in ('dump/modules/romfs.layers', 'base.nca'):
             (self.top / name).write_bytes(b'x')
-        r = self.sh('pick_game >/dev/null; echo "ok"', env={'SSBU_TREE': 'v13.0.5'})
+        r = self.sh('pick_game >/dev/null; echo "ok"')
         self.assertEqual(r.stdout.strip(), 'ok')
         (self.top / 'base.nca').unlink()
-        r = self.sh('pick_game; echo "not here"', env={'SSBU_TREE': 'v13.0.5'})
+        r = self.sh('pick_game; echo "not here"')
         self.assertIn(f'built: {self.top}/base.nca.', r.stdout)
 
     def test_not_built(self):
@@ -1024,14 +977,14 @@ class LaunchScriptTests(unittest.TestCase):
             r = subprocess.run([BASH, str(self.top / name)], capture_output=True, text=True, stdin=subprocess.DEVNULL,
                                cwd='/', timeout=60)
             self.assertEqual(r.returncode, 1, name)
-            self.assertIn('No game version is built here yet: double-click Install WindowSmash.command', r.stdout, name)
+            self.assertIn("The game isn't built here yet: double-click Install WindowSmash.command", r.stdout, name)
         r = subprocess.run([BASH, str(self.top / 'launchers/Build WindowSmash.command')], capture_output=True, text=True,
                            stdin=subprocess.DEVNULL, cwd='/', timeout=60)
         self.assertEqual(r.returncode, 1)
         self.assertIn("WindowSmash's Python (deps/venv) is not set up yet: double-click Install WindowSmash.command", r.stdout)
 
     def test_unlock(self):
-        make_tree(self.top, '.', '11.0.0')
+        make_tree(self.top, '.', '13.0.5')
         write(self.top / 'deps' / 'venv' / 'bin' / 'python', '#!/bin/bash\n[ "$1" = -c ] && exit 0\necho "PY $PWD | $*"\n', 0o755)
         fake = Path(self.temp.name) / 'bin'
         write(fake / 'pgrep', '#!/bin/bash\nexit 1\n', 0o755)   # (no game running)
@@ -1039,7 +992,7 @@ class LaunchScriptTests(unittest.TestCase):
         r = subprocess.run([BASH, str(self.top / 'launchers/Unlock All Fighters.command'), '--dry-run'], capture_output=True,
                            text=True, stdin=subprocess.DEVNULL, cwd='/', env=env, timeout=60)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertIn(f'PY {self.top} | tools/unlock_all.py --tree . --dry-run', r.stdout)
+        self.assertIn(f'PY {self.top} | tools/unlock_all.py --root {self.top} --dry-run', r.stdout)
         write(fake / 'pgrep', '#!/bin/bash\n[ "$1 $2" = "-x ssbu" ] && exit 0\nexit 1\n', 0o755)   # (the game is running)
         r = subprocess.run([BASH, str(self.top / 'launchers/Unlock All Fighters.command')], capture_output=True,
                            text=True, stdin=subprocess.DEVNULL, cwd='/', env=env, timeout=60)
@@ -1106,31 +1059,28 @@ class OpenTests(unittest.TestCase):
         self.assertEqual(cwd, 'cwd=/')   # (open starts apps in /: the runtime goes to SSBU_CWD)
         # (what Play SSBU.bat clears is gone, SSBU_LOG and SSBU_CWD are the launcher's, the rest passes on;
         # the lobby, name and direct connections are the game's to read from the files: --online)
-        self.assertEqual(env, {'SSBU_CWD': str(self.top), 'SSBU_LOG': f'{tree}/build/play.log', 'SSBU_HITCH': '40',
-                               'SSBU_TREE': '.'})
+        self.assertEqual(env, {'SSBU_CWD': str(self.top), 'SSBU_LOG': f'{tree}/build/play.log', 'SSBU_HITCH': '40'})
         self.assertIn('Online: lobby lobby.example:39421 (lobby code FRIENDS), as Tester.', r.stdout)
         self.assertIn('stand-in game: running', r.stdout)   # (the log, shown as it goes)
         self.assertEqual((tree / 'build' / 'play.log').read_text(), 'stand-in game: running\n')
         self.assertFalse((tree / 'build' / 'open.txt').exists())
 
-    def test_offline_version_tree(self):
-        make_tree(self.top, '.', '11.0.0')
-        tree = make_tree(self.top, 'v13.0.5', '13.0.5')
+    def test_offline(self):
+        tree = make_tree(self.top, '.', '13.0.5')
         (self.top / 'online_server.txt').write_text('lobby.example:39421\n')
-        r = self.run_launcher('launchers/Play SSBU Offline.command', '2\n', SSBU_NET_RELAY='lobby.example:1', SSBU_NET_NAME='x')
+        r = self.run_launcher('launchers/Play SSBU Offline.command', SSBU_NET_RELAY='lobby.example:1', SSBU_NET_NAME='x')
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         _cwd, args, env = self.record()
         self.assertEqual(args, [f'{tree}/dump/modules', '--status', '30'])
-        self.assertEqual(env, {'SSBU_CWD': str(self.top), 'SSBU_LOG': f'{tree}/build/play.log', 'SSBU_TREE': 'v13.0.5'})
-        self.assertEqual((self.top / 'last_version.txt').read_text(), 'v13.0.5\n')
+        self.assertEqual(env, {'SSBU_CWD': str(self.top), 'SSBU_LOG': f'{tree}/build/play.log'})
 
     def test_host(self):
-        tree = make_tree(self.top, 'v13.0.5', '13.0.5')
-        # (the stand-in writes the address where the runtime does: <version folder>/netplay_address.txt)
+        tree = make_tree(self.top, '.', '13.0.5')
+        # (the stand-in writes the address where the runtime does: the folder's netplay_address.txt)
         exe = tree / 'build-mac' / 'WindowSmash.app' / 'Contents' / 'MacOS' / 'ssbu'
         exe.write_text(exe.read_text().replace('sleep 1', 'echo "203.0.113.7:$SSBU_NET_PORT" > "$(dirname "$(dirname "$1")")/'
                                                           'netplay_address.txt"\nsleep 1'))
-        (self.top / 'netplay_address.txt').write_text('stale, in the wrong place\n')
+        (self.top / 'netplay_address.txt').write_text('stale, from the last time\n')   # (removed before the game starts)
         r = self.run_launcher('launchers/Host SSBU Netplay.command', 'Host Name\n\n40000\n')
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         _cwd, _args, env = self.record()
@@ -1197,7 +1147,7 @@ class OpenTests(unittest.TestCase):
 class ScriptSyntaxTests(unittest.TestCase):
     def test_bash_syntax(self):
         scripts = SCRIPTS + sorted((ROOT / 'launchers').glob('*.command'))
-        self.assertEqual(len({s.name for s in scripts}), 9)
+        self.assertEqual(len({s.name for s in scripts}), 8)
         for s in scripts:
             with self.subTest(s.name):
                 r = subprocess.run([BASH, '-n', str(s)], capture_output=True, text=True)
@@ -1205,14 +1155,13 @@ class ScriptSyntaxTests(unittest.TestCase):
                 data = s.read_bytes()
                 self.assertNotIn(b'\r', data, s.name)
                 self.assertTrue(data.endswith(b'\n'), s.name)
-                if s.name != 'pick_version.sh':   # (sourced only)
-                    self.assertTrue(data.startswith(b'#!/bin/bash\n'), s.name)
-                    self.assertTrue(os.stat(s).st_mode & stat.S_IXUSR, f'{s.name} is not executable')
+                self.assertTrue(data.startswith(b'#!/bin/bash\n'), s.name)
+                self.assertTrue(os.stat(s).st_mode & stat.S_IXUSR, f'{s.name} is not executable')
 
     def test_launchers_listed(self):
         # (the installer makes each runnable: every .command, and the scripts they run)
         commands = {p.relative_to(ROOT).as_posix() for p in [*ROOT.glob('*.command'), *(ROOT / 'launchers').glob('*.command')]}
-        self.assertEqual(commands | {'tools/mac/launch.sh', 'tools/mac/pick_version.sh'}, set(im.LAUNCHERS))
+        self.assertEqual(commands | {'tools/mac/launch.sh'}, set(im.LAUNCHERS))
         self.assertTrue(all((ROOT / n).is_file() for n in im.LAUNCHERS))
 
     def test_install_body_is_one_block(self):

@@ -70,8 +70,8 @@ HLE(_ZN2nn4nifm26GetCurrentPrimaryIpAddressEP7in_addr) {
 HLE(_ZN2nn4nifm22GetCurrentProxySettingEPNS0_12ProxySettingE) { c->x[0] = R_UNAVAILABLE; }
 
 /* (debugging: every failure the game records in an nn::err::ErrorResultVariant, with where)
- * The addresses are 11.0.0's; with the signature on the line before each (tools/recomp.py
- * wrap-sig) the recompiler finds the function in another game version, or leaves the hook out. */
+ * The addresses are 13.0.5's; the recompiler checks that the function there begins as the
+ * signature on the line before says (tools/recomp.py wrap-sig prints one). */
 /* signature: 320003e8 b9000008 b9400028 b9000408 d65f03c0 */
 HLE_WRAP(7109199790) {
     u32 r = c->x[1] ? ld32(c->x[1]) : 0;

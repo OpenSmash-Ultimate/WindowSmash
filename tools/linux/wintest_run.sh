@@ -6,7 +6,7 @@
 # Usage: wintest_run.sh <exe> <name> [shader cache to start from: copy|empty]
 #   <name>: a folder under linux-toolchain/test/runs for the log and captures
 #   WINTEST_PORT=<game tree> for another tree's modules, save and cache (default: the port's own,
-#   as tools/linux/toolchain.py finds it; e.g. its v13.0.5 for a program linked with that game)
+#   as tools/linux/toolchain.py finds it)
 set -u
 EXE="$1"; NAME="$2"; CACHE="${3:-copy}"
 HERE="$(cd "$(dirname "$0")" && pwd)"

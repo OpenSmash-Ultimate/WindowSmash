@@ -115,15 +115,19 @@ static const char DEFAULT_INI[] =
     "hide_cursor = 1\n"
     "; overlay = 1: show the frame rate in the corner from the start (F1 shows or hides it while playing).\n"
     "overlay = 1\n"
-#ifndef __APPLE__   /* (the Metal renderer draws at the game's own size) */
     "\n"
     "; render_scale = 1 | auto | a number from 0.5 to 4\n"
     ";   The game draws its pictures at 1920x1080. render_scale draws them this many times as wide and\n"
     ";   as tall: sharper on a bigger screen, more work for the graphics card (2 = four times the pixels).\n"
+#ifdef __APPLE__
+    ";   auto: as many pixels as the picture has in the window when the game starts, at least 1: 1.33 for\n"
+    ";   a 1280x720 window on a Retina display (2 x 2 pixels a point); in full screen, the screen's. A\n"
+    ";   bigger picture than the window is shrunk to fit.\n"
+#else
     ";   auto: as many pixels as the picture has in the window when the game starts (1.33 on a 2560x1440\n"
     ";   monitor with window = borderless), at least 1. A bigger picture than the window is shrunk to fit.\n"
-    "render_scale = 1\n"
 #endif
+    "render_scale = 1\n"
 #ifdef _WIN32
     "\n"
     "; gpu = auto, or part of a graphics card's name (e.g. nvidia, radeon, intel)\n"

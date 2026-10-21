@@ -18,7 +18,8 @@ There are two ways to get it:
 - **Copy over a package from Windows.** A Windows PC that has built the game can make an
   `ssbu-linux` folder to copy to a Linux machine or virtual machine. See [Setting up](#setting-up).
 
-Any game version should work; WindowSmash has been tested with 11.0.0 and 13.0.5.
+As on Windows, the game must be version 13.0.5, its last update
+([which copies count](UPDATES.md#what-counts-as-1305)).
 
 > [!IMPORTANT]
 > A built game holds the game's code and data. It's for your own machines, not for sharing.
@@ -54,9 +55,10 @@ the build needs, finds your game files, and builds the game. It needs:
   `sudo pacman-key --populate archlinux holo`. SteamOS leaves every package's header files out;
   the installer puts back the ones the build needs. A SteamOS update puts the system back as it
   was, so if something is missing after one, run the installer again.
-- **Your own game files**: the game (its `.nca` files, or an `.nsp` or `.xci`), with its update
-  and DLC if you have them; your keys (`prod.keys` and `title.keys`); and your firmware's `.nca`
-  files. An emulator's own folders work as they are.
+- **Your own game files**: the game (its `.nca` files, or an `.nsp` or `.xci`), with its 13.0.5
+  update (unless your dump has 13.0.5 merged in) and your DLC if you have it; your keys
+  (`prod.keys` and `title.keys`); and your firmware's `.nca` files. An emulator's own folders work
+  as they are, with the game updated to 13.0.5 there.
 
 1. **Download WindowSmash.** On the [GitHub page](https://github.com/SNO2207/WindowSmash), click
    **Code > Download ZIP**, then unpack it in your home folder, for example as `~/WindowSmash`.
@@ -76,9 +78,10 @@ the build needs, finds your game files, and builds the game. It needs:
    | :--- | :--- | :--- |
    | Keys | `prod.keys` and `title.keys` | `~/MyKeys` |
    | Firmware | your firmware's `.nca` files | `~/MyFirmware` |
-   | Game | the game's files, with its update and DLC | `~/MyDump` |
+   | Game | the game's files, with its 13.0.5 update and DLC | `~/MyDump` |
 
-   It checks each one and says what it found, then asks for the name other players see online.
+   It checks each one and says what it found, then asks for the name other players see online. A
+   game that isn't version 13.0.5 is refused, with what to add.
 5. **Wait for the build.** The first one compiles the whole game: from one to a few hours,
    depending on the processor and the memory. Later ones redo only what changed. If it stops, run
    `bash install-windowsmash.sh` again: it carries on where it stopped. Everything it says also
@@ -142,13 +145,17 @@ game's code is translated (a performance change to the translator, say) compiles
 again, once: about as long as the first build. To build from other
 game files, name them: `bash install-windowsmash.sh --game <folder>`.
 
+A folder an older WindowSmash built from another game version, such as 11.0.0, is set up again
+as 13.0.5 once your game folder has the 13.0.5 update; your save and settings stay
+([a folder built from another version](UPDATES.md#a-folder-built-from-another-version)).
+
 ### Shaders and first-time stutter
 
 The game's graphics programs (*shaders*) are made the first time each one is needed, which is why
 a new effect can show a moment late once. To make them all in advance, run
 `bash launchers/prepare-shaders.sh` from a terminal (on a Steam Deck: in Desktop Mode). It shows a
 progress bar with the time left, runs at low priority, and keeps the PC awake meanwhile. A first run
-makes about 40,000 shaders (for 13.0.5): half an hour on a fast desktop, and probably an hour or two on
+makes about 40,000 shaders: half an hour on a fast desktop, and probably an hour or two on
 a Steam Deck. You can stop it with Ctrl+C and start it again later; what is done stays done. It
 needs the game built first, and the game files where they were. It prepares the first step, the
 shader programs themselves; DXVK and the graphics driver still make their own GPU code from them
@@ -166,7 +173,7 @@ These are for the package from Windows.
 | **Processor** | One with AVX2 (Intel Haswell / AMD Excavator or newer). Virtual machines normally pass it through. |
 | **Graphics** | A Vulkan driver. Mesa's (`mesa-vulkan-drivers`) covers AMD, Intel and, without a GPU, the software renderer *lavapipe*. NVIDIA needs its proprietary driver. |
 | **Memory** | About 6 GB for the game on top of the desktop, so 12 GB or more for the whole machine is comfortable. |
-| **Game data** | The files the Windows build reads its RomFS from (its `romfs.cfg`): one NCA or RomFS image, or for a version folder, the base game's file and the update's `romfs_patch.bin`. |
+| **Game data** | The files the Windows build reads its RomFS from (its `romfs.cfg`): one NCA or RomFS image with 13.0.5 in it, or, when the Windows installer applied the 13.0.5 update itself, the game's own file and the update's `romfs_patch.bin`. |
 
 ## Setting up
 
@@ -190,8 +197,9 @@ with <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd> and press <kbd>Enter</kbd>.
    ```
 
 3. **Make the game data reachable.** The game reads its RomFS in place, without extracting
-   anything. For a version folder, the layer map `dump/modules/romfs.layers`, which comes with
-   this folder, pieces it together from two files. Either:
+   anything. When the Windows installer applied the 13.0.5 update over the game's own data, the
+   layer map `dump/modules/romfs.layers`, which comes with this folder, pieces it together from
+   two files: the game's file and `romfs_patch.bin`. Either:
 
    - copy those files into `ssbu-linux/game/`, or
    - in a **VMware** virtual machine, share the Windows folder that holds them instead (*VM >
@@ -209,7 +217,7 @@ with <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd> and press <kbd>Enter</kbd>.
    they say its name and where it was on Windows.
 
    To point at the files yourself, which also skips searching a large shared folder, set
-   `SSBU_NCA=/path/to/<the game's file>` and, for a version folder,
+   `SSBU_NCA=/path/to/<the game's file>` and, when there are two files,
    `SSBU_ROMFS_PATCH=/path/to/romfs_patch.bin`. The launchers remember them after that:
 
    ```bash
@@ -225,7 +233,7 @@ with <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd> and press <kbd>Enter</kbd>.
    The log goes to `build/play.log` and to the terminal.
 
 `run.sh` plays online, as `Play SSBU.bat` does on Windows: the game joins the online lobby named
-in `online_server.txt`, and Local Wireless lists every room that players of the same game version
+in `online_server.txt`, and Local Wireless lists every room that players in the same lobby
 create, on Windows or Linux ([Multiplayer](MULTIPLAYER.md)). The first time, it asks for the name other
 players see and keeps it in `online_name.txt`.
 
@@ -317,21 +325,21 @@ log names each pad as it connects, with its type and GUID.
 other shader is compiled the first time it's needed, so a new effect can show a moment late once.
 The Windows build's start-up shader prewarm is off here: under DXVK it made a Vulkan pipeline for
 every cached shader at once and held up the first frame (`SSBU_SHADER_PREWARM=1` turns it on).
-The Windows build's ahead-of-time shaders (`launchers\Prepare Shaders.bat`) aren't in the package (1.5 GB
-for 13.0.5).
+The Windows build's ahead-of-time shaders (`launchers\Prepare Shaders.bat`) aren't in the package (about
+1.5 GB).
 
 ## Other launchers
 
 | Launcher | What it does |
 | :--- | :--- |
 | `run-offline.sh` | The game without going online, as `launchers\Play SSBU Offline.bat` on Windows. |
-| `host-netplay.sh`, `join-netplay.sh` | A private room, as `launchers\Host SSBU Netplay.bat` and `launchers\Join SSBU Netplay.bat` on Windows ([Multiplayer](MULTIPLAYER.md)). Every player needs the same game version: 13.0.5 can't play with 11.0.0. |
-| `unlock-all-fighters.sh` | The unlock tool, on this folder's save. Run it with the game closed. Like `launchers\Unlock All Fighters.bat`, it knows the save layouts of 11.0.0 and 13.0.5 (it reads which one this folder's game is) and changes nothing for another version. |
+| `host-netplay.sh`, `join-netplay.sh` | A private room, as `launchers\Host SSBU Netplay.bat` and `launchers\Join SSBU Netplay.bat` on Windows ([Multiplayer](MULTIPLAYER.md)). |
+| `unlock-all-fighters.sh` | The unlock tool, on this folder's save. Run it with the game closed. Like `launchers\Unlock All Fighters.bat`, it knows 13.0.5's save layout (it checks that this folder's game is 13.0.5) and changes nothing otherwise. |
 
 ## Saves
 
-`save/` is a copy of the Windows save of the same game tree (its `save\` folder), taken when this
-folder was made. The two don't sync: copy `save/` back to that folder on Windows to carry progress
+`save/` is a copy of the Windows build's save (its `save\` folder), taken when this folder was
+made. The two don't sync: copy `save/` back to that folder on Windows to carry progress
 back.
 
 > [!WARNING]
@@ -361,8 +369,8 @@ installer puts them, and the overlay's font is drawn from the system's monospace
 (`tools/linux/make_overlay_font.py`, with Pillow).
 
 On Windows, the Linux program is cross-compiled next to the Windows build. It compiles the same
-generated C again, so build the game tree for Windows first (`tools/recomp.py`; for a version
-folder, `--tree`). You also need Visual Studio's Clang (`clang.exe` and `ld.lld.exe`, or name
+generated C again, so build the game for Windows first (`tools/build_game.py`, or
+`tools/recomp.py` by hand). You also need Visual Studio's Clang (`clang.exe` and `ld.lld.exe`, or name
 their folder in `SSBU_LLVM_BIN`) and Python 3.
 
 The third-party parts go in `linux-toolchain/`, next to the checkout (or in the folder named by
@@ -395,7 +403,7 @@ python tools/linux/package_linux.py --tar
 | Command | What it does |
 | :--- | :--- |
 | `build_vkd3d.py` | Builds vkd3d-shader, once. |
-| `build_linux.py` | Builds the game tree it finds (a built `v13.0.5` folder first, else the main one) into `build-linux/ssbu`, about 1.2 GB, with `ssbu.syms` for the profiler. `--port <tree>` names another tree. Each output folder holds one tree's game, so build another tree's into its own `--out` (for example `build-linux-11.0.0`). The first build compiles every game file again, about 25 minutes with 20 jobs; later builds only redo what changed. |
+| `build_linux.py` | Builds the checkout's game (its `dump/` and `build/`) into `build-linux/ssbu`, about 1.2 GB, with `ssbu.syms` for the profiler. `--port <folder>` builds another checkout's game instead; each output folder holds one game, so give that one its own `--out`. The first build compiles every game file again, about 25 minutes with 20 jobs; later builds only redo what changed. |
 | `package_linux.py` | Makes `dist-linux/ssbu-linux` from it, and `ssbu-linux.tar` with `--tar`. `--build` and `--out` package another tree's build. |
 
 To check the Linux renderer path without a Linux machine, `python tools/linux/wintest.py --vkd3d`

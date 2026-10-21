@@ -3,8 +3,9 @@
 The two codec libraries the game needs are built from these sources during the game build
 (`tools/codec_libs.py`, called from `tools/cc.py` when the program is linked), so music and
 movies work without anything to download or set up. Their license texts are here too
-([notices](../NOTICE.md)). Nothing is modified; every file is a verbatim copy from the upstream
-release named below, and the selection can be checked against that release's archive.
+([notices](../NOTICE.md)). Every file is a verbatim copy from the upstream release named below,
+except for the one line listed under [Local changes](#local-changes), and the selection can be
+checked against that release's archive.
 
 | Library | Version | Upstream archive | SHA-256 of the archive |
 | :--- | :--- | :--- | :--- |
@@ -60,10 +61,22 @@ configure run is needed:
 `tools/codec_libs.py` (`build_static`) compiles opus without the `x86` folders and the
 `OPUS_X86_*` defines, and libvpx with `config-arm64/` in place of `config/`.
 
+## Local changes
+
+- `opus/silk/x86/NSQ_del_dec_avx2.c`: `#ifdef _MSC_VER` became
+  `#if defined(_MSC_VER) && !defined(__clang__)`. Under that test the file defines its own
+  `__builtin_sadd_overflow` and `__builtin_ctz` for Microsoft's compiler, which lacks them.
+  clang-cl also defines `_MSC_VER` but has both built in, and older clang-cl versions refuse a
+  definition of a built-in function ("definition of builtin function '__builtin_ctz'"), so the
+  build stopped there for players whose Visual Studio came with one. Upstream opus still has
+  `#ifdef _MSC_VER` (checked against its main branch, October 2026). When you update opus,
+  apply this change again unless upstream has made it.
+
 ## Updating a library
 
 Take the new release's archive, repeat the selection above (the file lists come from the
-makefiles; the header set from `clang-cl /showIncludes` over the selected sources), regenerate
+makefiles; the header set from `clang-cl /showIncludes` over the selected sources), redo the
+[local changes](#local-changes) the new release still needs, regenerate
 `libvpx/config/` and `libvpx/config-arm64/` (its `README.md` says how), replace the folder, update
 the table above and the versions in `tools/codec_libs.py` (`PACKAGE_VERSION`) and `NOTICE.md`, then
 build: `python tools/codec_libs.py --force` compiles both in a few seconds, and

@@ -9,12 +9,11 @@ set "SSBU_NET_BIND="
 rem Starts the game as the netplay host: it runs the relay the other players join (UDP port
 rem 39420, opened on the router with UPnP when the router allows it). See docs\MULTIPLAYER.md.
 rem The address to give the other players appears in the game's overlay (F2) and in
-rem netplay_address.txt; the log goes to <version folder>\build\play.log. With several game
-rem versions built it asks which (docs\VERSIONS.md): every player needs the same version.
+rem netplay_address.txt; the log goes to build\play.log. Every player needs game version 13.0.5.
 cd /d "%~dp0.."
 setlocal
-call tools\pick_version.bat || (pause & exit /b 1)
-echo Every player needs this same game version.
+if not exist build\ssbu.exe (echo The game isn't built here yet: run Install WindowSmash.bat. & pause & exit /b 1)
+echo Every player needs game version 13.0.5, as you have.
 set "SSBU_NET_NAME=%USERNAME%"
 set /p "SSBU_NET_NAME=Your player name [%SSBU_NET_NAME%]: "
 set "SSBU_NET_ROOM=smash"
@@ -23,7 +22,7 @@ set "SSBU_NET_PORT=39420"
 set /p "SSBU_NET_PORT=UDP port [39420]: "
 set "SSBU_NET_HOST=1"
 if exist netplay_address.txt del netplay_address.txt
-start "SSBU netplay host log" /min cmd /c "%SSBU_TREE%\build\ssbu.exe %SSBU_TREE%\dump\modules --status 30 > %SSBU_TREE%\build\play.log 2>&1"
+start "SSBU netplay host log" /min cmd /c "build\ssbu.exe dump\modules --status 30 > build\play.log 2>&1"
 echo.
 echo Starting the game as host of room "%SSBU_NET_ROOM%"...
 echo In the game: Local Wireless ^> Create a Room. The others pick your room from the list.

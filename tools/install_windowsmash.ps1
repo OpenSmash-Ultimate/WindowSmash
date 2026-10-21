@@ -17,10 +17,16 @@ Steps, each skipped when it is already done, so running it again carries on wher
   3. python    a Python 3.10 or newer with the packages (deps\python, then python on the PATH, then
                the py launcher); otherwise python.org's embeddable Python 3.14 into deps\python, with
                pip and requirements.txt. Every later Python call uses the one found.
-  4. compiler  clang-cl, found and tried by tools\build_game.py --check; otherwise the Visual Studio
-               Build Tools with the C++ workload and the Clang component, through winget (a few GB),
-               or the missing components added to a Visual Studio already there (asks for
-               administrator rights); without winget, the manual step and its link.
+  4. compiler  clang-cl, found and tried by tools\build_game.py --check; otherwise first the compiler
+               without Visual Studio: tools\msvc_deps.py install puts LLVM (from GitHub) and
+               Microsoft's C runtime and Windows SDK (from Microsoft's servers, once you accept
+               Microsoft's license terms, which it shows) into deps\llvm and deps\msvc, about 570 MB
+               downloaded, no administrator rights. If that download or the check after it fails
+               (or with -BuildTools): the Visual Studio Build Tools with the C++ workload and the
+               Clang component, through winget (a few GB), or the missing components added to a
+               Visual Studio already there (asks for administrator rights); without winget, the
+               manual step and its link. Microsoft's license declined: it stops (the Build Tools
+               come under the same license).
   5. sdl3      deps\SDL3 from the newest SDL3-devel-<version>-VC.zip on GitHub, checked against the
                SHA-256 the release lists (controllers other than Xbox pads).
   6. codecs    nothing to fetch: the music and movie codecs are built from third_party\ during the
@@ -57,6 +63,8 @@ Prepare the game files (program, fonts, data, DLC, fighters) but stop before the
 Passed to the build: how many files to compile at a time (default: by the installed RAM).
 .PARAMETER NoUpdate
 Do not look for a newer WindowSmash (the updated installer is started with it).
+.PARAMETER BuildTools
+For the compiler, install the Visual Studio Build Tools rather than download it into deps\.
 #>
 [CmdletBinding()]
 param(
@@ -68,7 +76,8 @@ param(
     [switch]$NoWizard,
     [switch]$SkipBuild,
     [int]$Jobs,
-    [switch]$NoUpdate
+    [switch]$NoUpdate,
+    [switch]$BuildTools
 )
 
 $ErrorActionPreference = 'Stop'
@@ -807,14 +816,62 @@ function Invoke-VsModify {
     }
 }
 
+function Install-PortableCompiler {
+    <# tools\msvc_deps.py install, in this window: it shows Microsoft's license terms and asks before it
+       downloads anything. 'done', 'declined' or 'failed' (it said why). #>
+    $code = Invoke-Python @((Join-Path $Root 'tools\msvc_deps.py'), 'install')
+    if ($code -eq 0) { return 'done' }
+    if ($code -eq 2) { return 'declined' }
+    return 'failed'
+}
+
+function Remove-PortableCompiler {
+    <# tools\msvc_deps.py remove: deps\llvm and deps\msvc, so that cc.py looks for Visual Studio again. #>
+    [void](Invoke-Python @((Join-Path $Root 'tools\msvc_deps.py'), 'remove'))
+}
+
+function Step-PortableCompiler {
+    <# The compiler without Visual Studio (deps\llvm, deps\msvc). $true when it works now; $false to go
+       on to the Build Tools; stops when Microsoft's license terms are declined. #>
+    if ($DryRun) {
+        Write-Would 'run tools\msvc_deps.py install, which shows Microsoft''s license terms and asks you to accept them, then downloads (no administrator rights):'
+        $plan = Get-PythonOutput @((Join-Path $Root 'tools\msvc_deps.py'), 'plan')
+        foreach ($line in ($plan.Output -split "`n")) { if ($line.Trim()) { Write-Info "  $($line.Trim())" } }
+        if ($plan.Code -ne 0) { Write-Warn '  (Microsoft''s list could not be read just now: the download would fail, and the Build Tools come next)' }
+        Write-Info '  declined: it stops there. If the download or the check after it fails, the Visual Studio Build Tools instead:'
+        return $false
+    }
+    Write-Info 'downloading a compiler that needs no Visual Studio: LLVM from GitHub, and Microsoft''s C runtime and Windows SDK'
+    Write-Info 'from Microsoft''s servers, into deps\llvm and deps\msvc (about 570 MB, no administrator rights)'
+    $how = Install-PortableCompiler
+    if ($how -eq 'declined') {
+        throw ("Microsoft's license terms were not accepted, so the C runtime and the Windows SDK, which the game is built with, " +
+               "cannot be downloaded. The Visual Studio Build Tools come under the same terms. Run Install WindowSmash.bat again to " +
+               "accept them, or install Visual Studio yourself (setup guide step 4).")
+    }
+    if ($how -eq 'done') {
+        $check = Test-Compiler
+        if ($check.Ok) {
+            foreach ($line in ($check.Output -split "`n")) { if ($line -match 'clang-cl|toolchain') { Write-Info $line.Trim() } }
+            return $true
+        }
+        Write-Warn 'the downloaded compiler did not pass the check:'
+        Write-Info ($check.Output -split "`n" | Where-Object { $_ -match 'ERROR' } | Select-Object -First 1)
+        Remove-PortableCompiler
+    }
+    Write-Warn 'installing the Visual Studio Build Tools instead'
+    return $false
+}
+
 function Step-Compiler {
-    Write-Step '[4/10] The compiler (Visual Studio Build Tools with Clang)'
+    Write-Step '[4/10] The compiler'
     $check = Test-Compiler
     if ($check.Ok) {
-        foreach ($line in ($check.Output -split "`n")) { if ($line -match 'clang-cl|Python') { Write-Info $line.Trim() } }
+        foreach ($line in ($check.Output -split "`n")) { if ($line -match 'clang-cl|Python|toolchain') { Write-Info $line.Trim() } }
         return
     }
     Write-Info ($check.Output -split "`n" | Where-Object { $_ -match 'ERROR' } | Select-Object -First 1)
+    if (-not $BuildTools -and (Step-PortableCompiler)) { return }
     # @(): a function's list comes back as nothing when empty and as the one item when alone
     $instances = @(Get-VsInstances)
     $setup = Join-Path $VsInstallerDir 'setup.exe'
@@ -851,7 +908,7 @@ function Step-Compiler {
         throw ("The compiler still does not work after the install:`n" + $check.Output +
                "`nA restart may be needed. After it, run Install WindowSmash.bat again.")
     }
-    foreach ($line in ($check.Output -split "`n")) { if ($line -match 'clang-cl') { Write-Info $line.Trim() } }
+    foreach ($line in ($check.Output -split "`n")) { if ($line -match 'clang-cl|toolchain') { Write-Info $line.Trim() } }
 }
 
 # ---- step 5: SDL3 ----------------------------------------------------------------------------------------
@@ -963,7 +1020,7 @@ function Test-GameFolder {
     $lines = @($scan.summary)
     if (Test-Path -LiteralPath (Join-Path $Folder 'romfs.bin')) { $lines += 'romfs.bin found (the game data, used as it is).' }
     if ($scan.program) { return @{ Ok = $true; Text = ($lines -join ' ') } }
-    return @{ Ok = $false; Text = (($lines + @("Problem: $($scan.problem)")) -join ' ') }
+    return @{ Ok = $false; Text = ((@("Problem: $($scan.problem)") + $lines) -join ' ') }   # (the problem first: two lines show)
 }
 
 function Show-Wizard {
@@ -996,7 +1053,7 @@ function Show-Wizard {
     $rows = @{}
     $y = 58
     foreach ($spec in @(
-        @{ Key = 'Game'; Title = 'Game files'; Hint = "yuzu's or Ryujinx's game folder, or yours: the game (.xci, .nsp or .nca), update, DLC" },
+        @{ Key = 'Game'; Title = 'Game files'; Hint = "yuzu's or Ryujinx's game folder, or yours: the game (.xci/.nsp/.nca), its 13.0.5 update, DLC" },
         @{ Key = 'Keys'; Title = 'Keys'; Hint = "The folder with prod.keys and title.keys" },
         @{ Key = 'Firmware'; Title = 'Firmware'; Hint = "The folder with your Switch firmware's .nca files (for the fonts)" }
     )) {

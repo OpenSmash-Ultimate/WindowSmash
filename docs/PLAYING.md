@@ -22,7 +22,8 @@ Everything starts from a launcher. `Play SSBU.bat` and `Install WindowSmash.bat`
 
 | Launcher | What it does |
 | :--- | :--- |
-| **`Play SSBU.bat`** | Starts the game and joins the online lobby, so Local Wireless shows everyone's rooms. If the lobby doesn't answer, the game plays offline. |
+| **`Play SSBU.bat`** | Opens the WindowSmash window (below), then starts the game and joins the online lobby, so Local Wireless shows everyone's rooms. If the lobby doesn't answer, the game plays offline. |
+| **`Play SSBU.bat`** with <kbd>Shift</kbd> held | Opens the WindowSmash window even when you've ticked **Start the game directly next time**. |
 | **`launchers\Play SSBU Offline.bat`** | Starts the game without going online. |
 | **`launchers\Host SSBU Netplay.bat`** | Starts the game as the host of a private room ([multiplayer guide](MULTIPLAYER.md#private-room)). |
 | **`launchers\Join SSBU Netplay.bat`** | Starts the game and joins someone's private room. |
@@ -32,7 +33,7 @@ Everything starts from a launcher. `Play SSBU.bat` and `Install WindowSmash.bat`
 | **`launchers\Build WindowSmash.bat`** | Builds the game from your files, when the tools are already installed ([setup guide](BUILDING.md#shortcut-build-windowsmashbat)). |
 | **`launchers\Configure Game Data.bat`** | Points WindowSmash at your game data and fonts ([setup guide, step 10](BUILDING.md#step-10-connect-your-game-data)). |
 
-With [more than one game version](VERSIONS.md) built, the launchers ask which one to start. The last one you picked is the default.
+`Play SSBU.bat` first opens a small window that shows the game version (13.0.5) and changes the most used settings: your online name and lobby, the window and frame pacing, the render scale, the graphics card, and which player the keyboard is. **Play** saves what you changed and starts the game; **Close** changes nothing. It edits the same files as the in-game [settings](#settings), keeping their comments. Tick **Start the game directly next time** to skip the window; hold <kbd>Shift</kbd> while you start `Play SSBU.bat` to see it again.
 
 The first time you play online, the game picks a name for you, such as `Player1234`, and shows it at the bottom of the screen. To change it, open the [settings](#settings) and go to **Online**.
 
@@ -43,7 +44,7 @@ Press <kbd>Esc</kbd> in the game to open the settings. On a controller, press it
 | Page | What you can change |
 | :--- | :--- |
 | **Display** | Window or full screen, frame pacing, how many frames the graphics card works ahead, the mouse pointer, the frame rate in the corner, the window's size, the render scale, the graphics card. |
-| **Controllers** | For each connected controller: which player it is, face buttons by position or by label, stick dead zone, rumble, how far a trigger is pulled for ZL / ZR, and which control is each button (**Buttons...**). For the keyboard: which player it adds to. Also whether controllers work while another window is in front. |
+| **Controllers** | For each connected controller: which player it is, face buttons by position or by label, stick dead zone, rumble, how far a trigger is pulled for ZL / ZR, and which control is each button (**Buttons...**). For the keyboard: which player it adds to. Also **Rumble** on or off for every controller, and whether controllers work while another window is in front. |
 | **Online** | Public lobby, a private lobby code, your own server, or offline; your name; direct connections ([multiplayer guide](MULTIPLAYER.md)). |
 | **Game** | Restart or quit the game, the keys, and the game version. |
 
@@ -90,7 +91,7 @@ The keyboard plays as player 1, together with player 1's pad if there is one:
 
 ## Controllers
 
-Up to **eight players** can use pads at once: Xbox, PlayStation, Switch Pro, and most other controllers.
+Up to **eight players** can use pads at once: Xbox, PlayStation, Switch Pro, GameCube, and most other controllers.
 
 - Each pad that connects becomes the **next free player**. A pad that's unplugged and plugged back in gets its player back.
 - Buttons go by **position**, as on a Switch controller. On an Xbox controller, the right-hand button (**B**) is the Switch's **A**, and the bottom one (**A**) is the Switch's **B**. To use the printed letters instead, or to change any button, open the [settings](#settings) and go to **Controllers**.
@@ -98,6 +99,34 @@ Up to **eight players** can use pads at once: Xbox, PlayStation, Switch Pro, and
 
 > [!NOTE]
 > PlayStation, Switch Pro and most other pads need `SDL3.dll` next to `build\ssbu.exe`. [Step 12 of the setup guide](BUILDING.md#step-12-optional-support-more-kinds-of-controllers) adds it. Without it, only Xbox (XInput) pads work, as players 1–4.
+
+### GameCube controllers
+
+These work, each port or controller as its own player:
+
+- **Nintendo's GameCube controller adapter** (the one for Wii U and Switch), or another brand's adapter (Mayflash and others) set to its **Wii U** mode. Windows' own driver and the WinUSB driver Dolphin's setup installs with Zadig both work.
+- Another brand's adapter in its **PC** mode.
+- The **Nintendo Switch Online GameCube controller** (the one for Switch 2), on a **USB cable**. Its Bluetooth doesn't work with WindowSmash.
+
+They play as GameCube controllers, as they do on a Switch:
+
+- The game uses its own **GameCube controller** controls, which you can change in the game's **Options → Controls**.
+- The buttons go by the letters printed on them. **L** and **R** are analog, so the game reads how far they're pulled, and **Z** works as on the console.
+- Rumble works when the adapter's second plug (the grey one on Nintendo's adapter) is in a USB port too. WaveBird controllers have no rumble.
+
+> [!NOTE]
+> **The Switch Online GameCube controller needs one more step on some PCs.** It only starts sending its buttons after the game talks to its second USB "interface", and Windows may not give that interface a driver. If the log (`build\play.log`) says *its interface 1 has no WinUSB driver*:
+>
+> 1. Plug the controller in with its cable and open [Zadig](https://zadig.akeo.ie).
+> 2. Choose **Options → List All Devices**.
+> 3. Pick the controller's **Interface 1**: the USB ID shows `057E 2073 01`. Not Interface 0, which Windows needs for the buttons.
+> 4. Choose **WinUSB** as the driver and click **Replace Driver** (or **Install Driver**).
+>
+> Start the game again. The log then says *Switch 2 GameCube controller started*.
+
+The log names what it finds, on lines that start with `[input]`: an adapter (*GameCube adapter found*), each controller that becomes a player, and anything that stopped one from working.
+
+Any other pad can use the game's GameCube controls too: set `style = gamecube` for it in `controllers.ini` (below). Its triggers become L and R, and its shoulder buttons become Z.
 
 ### controllers.ini
 
@@ -108,19 +137,20 @@ The first time the game starts, it writes **`controllers.ini`** into the WindowS
 | `keyboard_player` | Which player the keyboard adds to: 1–8, or 0 for no keyboard. | `1` |
 | `background` | `1`: pads keep working while the game window isn't in front. `0`: only while it is. | `1` |
 | `layout` | `positional`: buttons by position, as on a Switch pad. `labels`: by the letter printed on the pad (PlayStation pads stay positional). | `positional` |
+| `style` | `auto`: GameCube controllers play as GameCube controllers, other pads as Pro Controllers. `gamecube` or `pro`: this pad plays as that kind of controller. | `auto` |
 | `deadzone` | How much of the stick's travel around the centre is ignored, 0–50 percent. | `0` |
-| `rumble` | Rumble strength, 0–100 percent. `0` turns it off. | `100` |
-| `trigger_threshold` | How far a trigger must be pulled to press ZL or ZR, 1–99 percent. | `25` |
+| `rumble` | Rumble strength, 0–100 percent. `0` turns it off. (In `[general]`: `0` turns rumble off for every controller, `1` leaves each at its own strength.) | `100` (`1` in `[general]`) |
+| `trigger_threshold` | How far a trigger must be pulled to press ZL or ZR, 1–99 percent. (On a GameCube controller, the game itself decides how far L and R are pulled.) | `25` |
 | *remaps* | `<Switch button> = <pad control>`, for example `ZR = rightshoulder`. The file lists every name. | |
 
 The file has these sections:
 
-- **`[general]`** holds `keyboard_player` and `background`.
+- **`[general]`** holds `keyboard_player`, `background` and `rumble` (on or off for every controller).
 - **`[players]`** reserves a player for one pad, for example `2 = DualSense Wireless Controller` (the settings' **Player** row writes the pad's GUID there). The log names every pad as it connects, with its type and GUID.
 - **`[device default]`** applies to every pad.
 - **`[device ps5]`**, **`[device <name>]`** or **`[device <GUID>]`** applies to one kind of pad, or one pad. Types include `xbox360`, `xboxone`, `ps4`, `ps5`, `switchpro`, `joyconpair` and `gamecube`. The settings write a controller's changes under `[device <its name>]`, or under the section it already takes its settings from.
 
-For example, to make every pad use the printed letters and turn rumble down on a PlayStation 5 pad:
+For example, to make every pad use the printed letters, turn rumble down on a PlayStation 5 pad, and give Xbox One pads the game's GameCube controls:
 
 ```ini
 [device default]
@@ -128,6 +158,9 @@ layout = labels
 
 [device ps5]
 rumble = 60
+
+[device xboxone]
+style = gamecube
 ```
 
 ## Window and display
@@ -147,13 +180,13 @@ The first start also writes **`display.ini`**, which sets how the game starts. T
 | `gpu` | Which graphics card draws the game. `auto`: the fastest; on a laptop with two, the NVIDIA or AMD one rather than the processor's own. Or part of a card's name, such as `nvidia`, `radeon` or `intel`. `build\play.log` lists the cards found (a `[gfx] graphics cards` line). | `auto` |
 | `render_scale` | How many times bigger than 1920 × 1080 the game draws its picture, in each direction: a number from `0.5` to `4`, or `auto`. `auto` matches the picture to the screen when the game starts, for example 1.33 (2560 × 1440) on a 1440p monitor with `window = borderless`; it never goes below 1. A picture bigger than the window is shrunk to fit, which smooths edges (`2` on a 1440p monitor). Each step up costs the graphics card more: `2` draws four times the pixels and needs about 200 MB more graphics memory. | `1` |
 
-`controllers.ini` and `display.ini` apply to every game version started from the same folder. A `display.ini` written by an older version has no `gpu` or `render_scale` line; the game then uses `auto` and `1`. Add the line yourself to use it, or delete `display.ini` to get a new one with every setting. `render_scale` is read when the game starts: change it, then start the game again.
+A `display.ini` written by an older WindowSmash has no `gpu` or `render_scale` line; the game then uses `auto` and `1`. Add the line yourself to use it, or delete `display.ini` to get a new one with every setting. `render_scale` is read when the game starts: change it, then start the game again.
 
 ## Shaders and first-time stutter
 
 The game's graphics programs (*shaders*) are prepared the first time each one is used, so a new effect can show a moment late, or stutter, the first time you see it. WindowSmash keeps every prepared shader in `dump\shadercache\` and loads them in the background each time the game starts, so each stutter happens only once.
 
-To prepare them all before playing, double-click **`launchers\Prepare Shaders.bat`**. It runs once per game version, at low priority so the PC stays usable, and shows a progress bar with the time left. A first run compiles about 40,000 shaders (for 13.0.5): about half an hour on a 16-thread processor, an hour or two on a 4- to 8-thread one. You can close it at any time and start it again later; what's done stays done, so a later run takes minutes. It needs Python and Visual Studio, as for [building](BUILDING.md).
+To prepare them all before playing, double-click **`launchers\Prepare Shaders.bat`**. It runs at low priority so the PC stays usable, and shows a progress bar with the time left. A first run compiles about 40,000 shaders: about half an hour on a 16-thread processor, an hour or two on a 4- to 8-thread one. You can close it at any time and start it again later; what's done stays done, so a later run takes minutes. It needs Python and Visual Studio, as for [building](BUILDING.md).
 
 ## Low frame rate
 
@@ -170,7 +203,7 @@ All of these are in the WindowSmash folder:
 
 | What | Where |
 | :--- | :--- |
-| Your save | `save\`. Another game version keeps its own, for example `v13.0.5\save\`. |
+| Your save | `save\` |
 | Screenshots (<kbd>F3</kbd>) | `screenshots\` |
 | The game's log | `build\play.log` |
 | Crash and freeze reports | `reports\` |
@@ -194,6 +227,6 @@ When the game crashes, or freezes with no new picture for five seconds, WindowSm
 
 When you report a problem, attach the `.txt` report and the end of `build\play.log`. Read them first: they can contain folder names, player names and internet addresses. **Share a `.dmp` file only privately**, with someone who asked for it, because it contains part of the game's memory. [Getting help](../README.md#getting-help) lists what else to include.
 
-If the game doesn't start at all, check, in this order: the game data path ([step 10](BUILDING.md#step-10-connect-your-game-data)), that the game version matches, the six font files, that your processor has AVX2, and your graphics driver.
+If the game doesn't start at all, check, in this order: the game data path ([step 10](BUILDING.md#step-10-connect-your-game-data)), that the game is version 13.0.5 (a game built from another version says so when it starts: [what to do](UPDATES.md#a-folder-built-from-another-version)), the six font files, that your processor has AVX2, and your graphics driver.
 
 WindowSmash is experimental. That it starts doesn't mean every fighter, stage, mode or online match works.

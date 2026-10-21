@@ -61,6 +61,7 @@ void account_save_id(u64 uid[2]);                       /* (hle_env.c) the id na
 /* ---- kernel ---------------------------------------------------------------------- */
 void kernel_init(void);
 void kernel_add_region(u64 base, u64 size, u32 state, u32 perm);   /* for svcQueryMemory */
+int kernel_read64(u64 addr, u64 *out);                  /* 0 if no mapped memory holds addr */
 Cpu *kernel_main_thread(u32 *handle);                  /* context + handle for the initial thread */
 u32 kernel_new_session(void *session);                 /* a handle for a native IPC session */
 void *kernel_session_of(u32 handle);

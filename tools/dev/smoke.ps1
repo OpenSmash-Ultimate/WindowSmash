@@ -1,4 +1,4 @@
-# Compile and run a known 11.0.0 main-module function against prepared local inputs.
+# Compile and run a known 13.0.5 main-module function against prepared local inputs (runtime/smoke.c).
 $ErrorActionPreference = 'Stop'
 $here = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path))   # the WindowSmash folder (this is tools\dev\)
 $tools = Join-Path $here 'tools'
@@ -15,7 +15,7 @@ if (-not (Test-Path -LiteralPath $image)) {
     python (Join-Path $tools 'recomp.py') image (Join-Path $exefs 'main') --out $image
     if ($LASTEXITCODE) { throw 'Module image generation failed.' }
 }
-python (Join-Path $tools 'recomp.py') emit (Join-Path $exefs 'main') --roots 256c220 --out (Join-Path $build 'smoke_gen.c')
+python (Join-Path $tools 'recomp.py') emit (Join-Path $exefs 'main') --roots 25ee6c0 --out (Join-Path $build 'smoke_gen.c')
 if ($LASTEXITCODE) { throw 'C emission failed.' }
 & $clang /nologo /O2 /arch:AVX2 -mfma -fno-strict-aliasing /clang:-ffp-contract=off `
     -Wno-unused-variable -Wno-unused-but-set-variable -Wno-unused-label -Wno-parentheses-equality `

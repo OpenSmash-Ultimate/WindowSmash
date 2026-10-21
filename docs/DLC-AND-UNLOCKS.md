@@ -1,6 +1,6 @@
 # DLC and unlocks
 
-[← README](../README.md) · [Setup guide](BUILDING.md) · [Game updates](UPDATES.md) · [Multiplayer](MULTIPLAYER.md)
+[← README](../README.md) · [Setup guide](BUILDING.md) · [13.0.5 update](UPDATES.md) · [Multiplayer](MULTIPLAYER.md)
 
 Three separate things are involved:
 
@@ -10,24 +10,17 @@ Three separate things are involved:
 
 ## Contents
 
-- [Which DLC each version has](#which-dlc-each-version-has)
+- [The DLC fighters in 13.0.5](#the-dlc-fighters-in-1305)
 - [Turn on your DLC](#turn-on-your-dlc)
 - [Unlock every base-game fighter](#unlock-every-base-game-fighter)
 - [Other ways to run the unlock tool](#other-ways-to-run-the-unlock-tool)
 - [What the unlock tool changes](#what-the-unlock-tool-changes)
 
-## Which DLC each version has
+## The DLC fighters in 13.0.5
 
-The game's version decides which DLC fighters it has. For the two tested versions:
+WindowSmash plays version 13.0.5, the game's last update, and 13.0.5 has every DLC fighter: Piranha Plant, Joker, Hero, Banjo & Kazooie, Terry, Byleth, Min Min, Steve, Sephiroth, Pyra/Mythra, **Kazuya** and **Sora**. Which of them you can play depends on the DLC you own and turn on ([below](#turn-on-your-dlc)).
 
-| Game version | DLC fighters it can use |
-| :--- | :--- |
-| **11.0.0** | Piranha Plant, Joker, Hero, Banjo & Kazooie, Terry, Byleth, Min Min, Steve, Sephiroth, Pyra/Mythra. |
-| **13.0.5** | All of the above, plus **Kazuya** (added in 12.0.0) and **Sora** (added in 13.0.0). |
-
-No setting or save change can add a fighter that your version's game data doesn't have. To get Kazuya and Sora on an older version, [apply a later update](UPDATES.md) from your own update file.
-
-The 11.0.0 build extracts and compiles the 96 modules in the game archive's `prebuilt:/nro/release/` folder (98 in 13.0.5): fighters, but also shared logic, items and special modes. That doesn't mean every fighter, stage or mode has been tested in a match.
+The build extracts and compiles the 98 modules in the game archive's `prebuilt:/nro/release/` folder: fighters, but also shared logic, items and special modes. That doesn't mean every fighter, stage or mode has been tested in a match.
 
 ## Turn on your DLC
 
@@ -53,8 +46,6 @@ Without `aoc.cfg`, the game sees no DLC. To make one from your own DLC files:
 
 The next time the game starts, it may announce new fighters, stages, music or costumes. In multiplayer, every player should have the same DLC.
 
-**For a version folder** such as `v13.0.5`, write its own list with `--out v13.0.5/dump/modules/aoc.cfg`, or give `tools/install_version.py` the `--dlc` option, which does it for you ([game updates](UPDATES.md)).
-
 **With a runtime package**, give `launchers\Configure Game Data.bat` an `aoc.cfg` you already have when it asks. Packages never include anyone's DLC list.
 
 ## Unlock every base-game fighter
@@ -63,13 +54,13 @@ The game starts with only the original eight fighters unlocked. `launchers\Unloc
 
 1. Start the game once and wait for the main menu, so it creates a save. Then close it.
 2. **Make sure every game window is closed.** The game keeps its save in memory and would overwrite the change.
-3. Double-click **`launchers\Unlock All Fighters.bat`** in the WindowSmash folder. With [several versions](VERSIONS.md) built, it asks which one.
+3. Double-click **`launchers\Unlock All Fighters.bat`** in the WindowSmash folder.
 4. Read what it says. It makes a dated backup of your save in `save_backups\` first: keep it.
 5. Start the game again. Unlock notices appear for the new fighters: skip each with the **X** button (<kbd>C</kbd> on the keyboard).
 
 **Mii Fighters** may need to be made first, under **Games & More → Mii Fighters**, before they appear on character select.
 
-The tool runs with Windows' built-in PowerShell, so it doesn't need Python. It refuses to run while the game is open, works only on 11.0.0 and 13.0.5 saves (it refuses other versions), and replaces the save only after making the backup. Running it again once every fighter is unlocked changes nothing.
+The tool runs with Windows' built-in PowerShell, so it doesn't need Python. It refuses to run while the game is open, works only when the game built here is 13.0.5 (it changes nothing otherwise), and replaces the save only after making the backup. Running it again once every fighter is unlocked changes nothing.
 
 **To undo:** close the game, then copy the backup the tool reported back over the `system_data.bin` it names.
 
@@ -80,15 +71,14 @@ From PowerShell in the WindowSmash folder. `--dry-run` (`-DryRun`) shows what wo
 ```powershell
 python tools/unlock_all.py --dry-run
 python tools/unlock_all.py
-python tools/unlock_all.py --tree v13.0.5 --dry-run
 python tools/unlock_all.py --save "D:\MySave\system_data.bin" --dry-run
 powershell -NoProfile -File tools/Unlock-All-Fighters.ps1 -DryRun
 ```
 
-- `--tree` (`-Tree` in PowerShell) works on a version folder and its own save. Without it, the tools use the main folder's.
-- The tools read which version a folder holds from its program's build ID.
-- They know the `system_data.bin` layout of **11.0.0** and **13.0.5**, which share the same offsets, and refuse every other version.
-- They don't convert saves between versions and don't install DLC. They never need anyone else's save.
+- Without `--save`, the tools use the WindowSmash folder's own save.
+- They check that the game built here is 13.0.5, from its program's build ID.
+- They know 13.0.5's `system_data.bin` layout, and change nothing for any other version.
+- They don't convert saves (13.0.5 upgrades an older save itself, [below](#1305s-save)) and don't install DLC. They never need anyone else's save.
 
 ## What the unlock tool changes
 
@@ -96,7 +86,7 @@ Each base-game fighter has a selection and challenger entry, and a separate "joi
 
 ### 13.0.5's save
 
-13.0.5 keeps 11.0.0's layout:
+If an older WindowSmash built your folder from 11.0.0 and it was then [set up again as 13.0.5](UPDATES.md#a-folder-built-from-another-version), your save was made by 11.0.0. 13.0.5 keeps 11.0.0's layout, so that save carries over:
 
 - The save is the same size, with the same format number at offset 4 (`0x1b`). Offset 8 holds the version that last wrote it: `0xb000` for 11.0.0, `0xd005` for 13.0.5. When 13.0.5 loads an 11.0.0 save, it changes that field and a few counters and moves no tables.
 - Fighter entries are indexed by `save_no` from `ui/param/database/ui_chara_db.prc`: 0–73 for the base game and 74–83 for the earlier DLC fighters, the same in both versions. 13.0.5 adds 84 (Kazuya) and 85 (Sora), with their milestones after the other DLC fighters'.

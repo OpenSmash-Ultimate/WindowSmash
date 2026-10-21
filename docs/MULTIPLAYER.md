@@ -32,13 +32,13 @@ WindowSmash plays the game's **Local Wireless** mode over the internet. To the g
 
 The online lobby is the easiest: nobody hosts anything outside the game, and nobody touches their router.
 
-On Linux ([Linux guide](LINUX.md)), `run.sh`, `run-offline.sh`, `host-netplay.sh` and `join-netplay.sh` do what `Play SSBU.bat`, `launchers\Play SSBU Offline.bat`, `launchers\Host SSBU Netplay.bat` and `launchers\Join SSBU Netplay.bat` do. Windows and Linux players with the same game version play together.
+On Linux ([Linux guide](LINUX.md)), `run.sh`, `run-offline.sh`, `host-netplay.sh` and `join-netplay.sh` do what `Play SSBU.bat`, `launchers\Play SSBU Offline.bat`, `launchers\Host SSBU Netplay.bat` and `launchers\Join SSBU Netplay.bat` do. Windows and Linux players play together.
 
 ## Before you play
 
 Whichever way you choose:
 
-1. **Everyone uses the same WindowSmash and the same game version.** A 13.0.5 player can't play with an 11.0.0 player.
+1. **Everyone uses the same WindowSmash, with the game at version 13.0.5.** WindowSmash builds no other version, so every player can play with every other. The online lobby turns away a game an older WindowSmash built from another version: its overlay says `Netplay: WindowSmash needs game 13.0.5: run the installer again` ([what to do](UPDATES.md#a-folder-built-from-another-version)).
 2. **Every PC is set up with its own game data**, following the [setup guide](BUILDING.md). Match the DLC between players too.
 3. **Every PC keeps its own save and its own `netplay_id.txt`.** Never copy `netplay_id.txt` to another PC: two PCs with the same one look like one player.
 4. **Check the game works offline first** with `launchers\Play SSBU Offline.bat`, then close it.
@@ -47,7 +47,7 @@ Each WindowSmash window is one player. A private room holds up to eight members,
 
 ## Online lobby
 
-This is what `Play SSBU.bat` does by default. Every Local Wireless room that anyone creates shows up for every player with the same game version.
+This is what `Play SSBU.bat` does by default. Every Local Wireless room that anyone creates shows up for every player in the lobby.
 
 1. Double-click **`Play SSBU.bat`**. The first time, the game picks the name other players see, such as `Player1234`, and shows it at the bottom of the screen. To change it, press <kbd>Esc</kbd> in the game, go to **Online**, choose **Your name**, then **Game → Restart the game** ([settings](PLAYING.md#settings)).
 2. If Windows Security asks about `ssbu.exe`, click **Allow**. No port forwarding is needed: your game only sends to the lobby.
@@ -65,6 +65,10 @@ A lobby code hides your rooms from everyone who doesn't use the same code.
 1. Press <kbd>Esc</kbd> in the game and go to **Online**.
 2. Set **Play online in** to **private lobby**, choose **Lobby code**, and type your code.
 3. Choose **Restart now**. Everyone in your group does the same, with the same code.
+
+The window `Play SSBU.bat` opens before the game does the same: set **Lobby** to **Private lobby (a code)** and type your code.
+
+Capital letters count: `OurCode` and `ourcode` are two different lobbies.
 
 Or, with the game closed, add a space and your code after the address in `online_server.txt`, for example:
 
@@ -91,7 +95,7 @@ The game's own **Online** menu works with WindowSmash's game server, which runs 
 2. In the main menu, choose **Online**, then **Smash**, then **Quickplay**.
 3. Choose your rules and fighter, then **Ready to fight**. The game waits in its practice room until it finds another player.
 
-- **Who you meet:** players with the same game version and the same lobby code (or none) who are searching too.
+- **Who you meet:** players with the same lobby code (or none) who are searching too.
 - **Your account:** the game server knows you by your `netplay_id.txt` and keeps your player name and ratings. Keep that file to keep your account, and don't give it to anyone: a copy of it plays as you.
 - **Your connection:** the game reaches the game server through the lobby, over TCP and UDP on the lobby's port. Nobody needs to open a port. Once players are matched, the match's traffic goes through the lobby: [direct connections](#direct-connections-and-your-internet-address) are only for Local Wireless rooms so far.
 
@@ -99,7 +103,7 @@ The game's own **Online** menu works with WindowSmash's game server, which runs 
 | :--- | :--- |
 | An error as soon as you choose **Online** | Start the game with `Play SSBU.bat`, not `launchers\Play SSBU Offline.bat`, and check that the overlay (<kbd>F1</kbd>) says `Online`. |
 | An error code starting with **2306** | The game can't reach the game server. The lobby in `online_server.txt` has none (port 39420, or a lobby of your own run with `ssbu_relay.py`), or something blocks TCP to it. |
-| Quickplay keeps waiting | Nobody with your game version and lobby code is searching right now. Find players on the [Discord server](https://discord.gg/pkgyYGf3YB). |
+| Quickplay keeps waiting | Nobody with your lobby code is searching right now. Find players on the [Discord server](https://discord.gg/pkgyYGf3YB). |
 
 ## Direct connections and your internet address
 
@@ -175,11 +179,12 @@ If your internet provider uses carrier-grade NAT, or your router sits behind ano
 | :--- | :--- |
 | The overlay stays on `connecting` | The host's address and port, that the host's game is still running, the host's firewall rule for incoming UDP, the router's port mapping, and whether the relay can be reached. |
 | `no answer from … - playing offline` | The lobby in `online_server.txt` hasn't answered for five seconds. Check the address with `python tools/ssbu_relay.py --probe <address>`. |
-| Online, a room is missing from the list | Both players need the same game version and the same lobby code (or none), and both overlays must say `Online`. The list refreshes every few seconds. |
+| `Netplay: WindowSmash needs game 13.0.5: run the installer again` | Your game was built from another version of the game, by an older WindowSmash. Put the game's 13.0.5 update in your game folder and run `Install WindowSmash.bat` again: it sets the folder up again as 13.0.5, keeping your save and settings ([how](UPDATES.md#a-folder-built-from-another-version)). |
+| Online, a room is missing from the list | Both players need the same lobby code (or none), and both overlays must say `Online`. The list refreshes every few seconds. |
 | Both are connected, but in different groups | Private-room names must match exactly. |
 | The relay count is right, but no Local Wireless room | The host must create a room in the game: being connected doesn't create one. Wait for the list to refresh. |
 | Two people show up as one player | Their installs share an identity. Close the game on one PC and **rename** its `netplay_id.txt`, so a new one is made. Keep both saves. |
-| *Communication error* after joining | Packet loss, whether the relay can be reached, matching versions and DLC, and whether the host or relay closed or changed networks. |
+| *Communication error* after joining | Packet loss, whether the relay can be reached, matching DLC, and whether the host or relay closed or changed networks. |
 | Works at home, not over the internet | The host's firewall, UDP port forwarding, double NAT or carrier-grade NAT. Or use a virtual LAN, a relay on a server, or the online lobby. |
 | Online, a player is always `relayed` | Their router or yours doesn't allow direct paths (symmetric NAT, common on mobile networks), a firewall drops the game's packets, or the lobby is older than direct connections. Play still works through the lobby. If Windows Firewall was told to block `ssbu.exe`, allow it in **Windows Security → Firewall & network protection → Allow an app through firewall**. |
 | It works, but feels delayed | Traffic through a relay or the lobby adds both players' pings to it. Pick a host or lobby close to the players, and check the overlay for players who aren't `direct`. |

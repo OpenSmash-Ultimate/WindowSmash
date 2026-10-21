@@ -2,26 +2,25 @@
 """Minimal reader for the game's data.arc: file lookup by path, extraction.
 
 Usage:
-  arc.py info [--tree <dir>] [--romfs-cfg <romfs.cfg>]
-  arc.py get  <arc path>... --out <dir> [--tree <dir>] [--romfs-cfg <romfs.cfg>]
-  arc.py nro  [--out <dir>] [--tree <dir>] [--romfs-cfg <romfs.cfg>]
+  arc.py info [--romfs-cfg <romfs.cfg>]
+  arc.py get  <arc path>... --out <dir> [--romfs-cfg <romfs.cfg>]
+  arc.py nro  [--out <dir>] [--romfs-cfg <romfs.cfg>]
 
 data.arc is read in place inside the game's RomFS, found through romfs.cfg (default
-<tree>/dump/modules/romfs.cfg, the file the runtime reads; plain or layered, see
-nca.RomfsImage). The tree is the port's folder (default), or another game version's folder of
-the same layout, e.g. v13.0.5 (tools/update.py). Paths are the archive's own, e.g.
-"prebuilt:/nro/release/lua2cpp_mario.nro"; `get` writes each file under its base name.
-`nro` extracts every module in prebuilt:/nro/release/ that is not compiled in yet (not in
-<tree>/dump/nro/bases.txt) into <tree>/dump/nro, where the next `recomp.py all` picks it up -
-the same place the runtime saves an NRO the game hands over (runtime/hle_ro.c). The archive
-stores only hashes of names, so `nro` knows a module by the names in NRO_NAMES.
+dump/modules/romfs.cfg, the file the runtime reads; plain or layered, see nca.RomfsImage).
+Paths are the archive's own, e.g. "prebuilt:/nro/release/lua2cpp_mario.nro"; `get` writes each
+file under its base name. `nro` extracts every module in prebuilt:/nro/release/ that is not
+compiled in yet (not in dump/nro/bases.txt) into dump/nro, where the next `recomp.py all` picks
+it up - the same place the runtime saves an NRO the game hands over (runtime/hle_ro.c). The
+archive stores only hashes of names, so `nro` knows a module by the names in NRO_NAMES.
 
 Layout (smash-arc's naming): a header, then a zstd-compressed file system table; a path's
 hash40 (crc32 of the lowercase path | length << 32) picks a bucket, a binary search in the
 bucket gives the path, and path -> file info index -> file info -> info-to-data -> folder
-offset + file data locate the bytes. Early releases of the game (the original 1.0.0, and others
-before the table's version field) store the table in other forms and layouts (table_form); those
-are refused, with the advice to add the game's update, whose data.arc is the newer kind.
+offset + file data locate the bytes. The table's header holds the game version (data_version:
+13.0.5's is 0x0D0005, tools/game_version.py). Early releases of the game (the original 1.0.0,
+and others before the table's version field) store the table in other forms and layouts
+(table_form); those are not 13.0.5's, and are refused.
 """
 import argparse
 import os
@@ -42,9 +41,8 @@ from nca import RomfsImage, romfs_entries  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 NRO_DIR = "prebuilt:/nro/release/"
-# Every module in NRO_DIR as of 11.0.0 (96): the fighters, plus common, item, element (shared by
-# Pyra/Mythra), koopag (Giga Bowser), ptrainer, and the Mii enemies of Spirits/Classic; and
-# demon (Kazuya, 12.0.0) and trail (Sora, 13.0.0).
+# Every module in 13.0.5's NRO_DIR (98): the fighters, plus common, item, element (shared by
+# Pyra/Mythra), koopag (Giga Bowser), ptrainer, and the Mii enemies of Spirits/Classic.
 NRO_NAMES = ("bayonetta brave buddy captain chrom cloud common daisy dedede demon diddy dolly donkey duckhunt "
              "edge eflame element elight falco fox gamewatch ganon gaogaen gekkouga ike inkling item jack kamui "
              "ken kirby koopa koopag koopajr krool link littlemac lucario lucas lucina luigi mario mariod marth "
@@ -58,9 +56,10 @@ LOW40 = (1 << 40) - 1
 # the file system table's forms (ArcCross's rules: github.com/Ploaj/ArcCross, ArcCross/ARC.cs)
 ZSTD_TABLE = 0x10             # the table header's first field when the table is zstd-compressed
 V1_FILE_DATA = 0x8824AF68     # file data starting before this: the original release's layout (1.0.0)
-V3_TABLE_SIZE = 0x2992DD4     # a table this long or longer has the version field (11.0.0's is 0x30434DC)
-EARLY_RELEASE = ("This copy of the game is an early release, whose data.arc WindowSmash can't read yet ({}). "
-                 "Add the game's update (the newest you have) to the game files.")
+V3_TABLE_SIZE = 0x2992DD4     # a table this long or longer has the version field (13.0.5's is 0x31EA858)
+NOT_13 = ("This game data is not version 13.0.5's ({}): WindowSmash needs version 13.0.5 of the game. Put the "
+          "game's 13.0.5 update (an .nsp file) next to the game and set it up again.")
+VERSION_FIELD = 60            # the table's version field (Arc: after the counts and the region count)
 DAMAGED = "This copy of the game looks damaged or incomplete ({}). Copy the game's files again."
 
 
@@ -72,7 +71,7 @@ def hash40(path):
 def table_form(read):
     """How data.arc's file system table is stored, from `read(offset, size)` over data.arc:
     (form, layout, size). form: "zstd", or "uncompressed" or "raw" (early releases); layout:
-    "v3" (with the version field: later releases, 11.0.0 and 13.0.5 among them), "v2" (an early
+    "v3" (with the version field: later releases, 13.0.5 among them), "v2" (an early
     release's, without it) or "v1" (the original release's, other structures altogether); size:
     the table's, uncompressed. Only zstd and v3 is read here (readable)."""
     hdr = struct.unpack("<7Q", read(0, 0x38))
@@ -92,12 +91,39 @@ def table_form(read):
 
 
 def readable(form, layout):
+    """Whether this reader reads a table of this form: 13.0.5's (zstd, with the version field)."""
     return form == "zstd" and layout == "v3"
 
 
 def form_text(form, layout):
     """A table form for a person (what a bug report should quote)."""
     return f"data.arc: {form} file table, {layout} layout"
+
+
+def zstd_head(data, size):
+    """At least the first `size` bytes `data` decompresses to, of a zstd frame given in part."""
+    try:
+        from compression.zstd import ZstdDecompressor   # Python 3.14
+        return ZstdDecompressor().decompress(data, max_length=size)
+    except ImportError:
+        return zstandard.ZstdDecompressor().decompressobj().decompress(data)
+
+
+def data_version(read):
+    """data.arc's version field (0x0D0005 for 13.0.5), from `read(offset, size)` over data.arc,
+    reading only the table's start; None for an early release's table, which has none."""
+    form, layout, _size = table_form(read)
+    if not readable(form, layout):
+        return None
+    hdr = struct.unpack("<7Q", read(0, 0x38))
+    data_start, _decomp, comp, _ = struct.unpack("<4I", read(hdr[4], 16))
+    try:
+        head = zstd_head(read(hdr[4] + data_start, min(comp, 0x40000)), VERSION_FIELD + 4)
+    except ZstdError as e:
+        raise SystemExit(DAMAGED.format(f"data.arc's file table could not be decompressed: {e}"))
+    if len(head) < VERSION_FIELD + 4:
+        raise SystemExit(DAMAGED.format("data.arc's file table is cut short"))
+    return struct.unpack_from("<I", head, VERSION_FIELD)[0]
 
 
 def unzstd(data, what):
@@ -116,12 +142,12 @@ def data_arc_offset(image):
     return found[0]
 
 
-def game_data_form(cfg):
-    """table_form of data.arc in the RomFS a romfs.cfg reads (its files closed again)."""
+def game_data_version(cfg):
+    """data_version of data.arc in the RomFS a romfs.cfg reads (its files closed again)."""
     image = RomfsImage(cfg)
     try:
         base = data_arc_offset(image)
-        return table_form(lambda off, size: image.read(base + off, size))
+        return data_version(lambda off, size: image.read(base + off, size))
     finally:
         image.close()
 
@@ -137,7 +163,7 @@ class Arc:
             self.read = source
         form, layout, _size = table_form(self.read)
         if not readable(form, layout):
-            raise SystemExit(EARLY_RELEASE.format(form_text(form, layout)))
+            raise SystemExit(NOT_13.format(form_text(form, layout)))
         hdr = self.header = struct.unpack("<7Q", self.read(0, 0x38))
         self.file_section = hdr[2]
         data_start, decomp, comp, _ = struct.unpack("<4I", self.read(hdr[4], 16))
@@ -286,10 +312,9 @@ def main():
     ap.add_argument("cmd", choices=["info", "get", "nro"])
     ap.add_argument("paths", nargs="*")
     ap.add_argument("--out")
-    ap.add_argument("--tree", default=ROOT, help="the port's folder or a game version's folder (e.g. v13.0.5)")
     ap.add_argument("--romfs-cfg")
     a = ap.parse_args()
-    arc = Arc(a.romfs_cfg or os.path.join(a.tree, "dump", "modules", "romfs.cfg"))
+    arc = Arc(a.romfs_cfg or os.path.join(ROOT, "dump", "modules", "romfs.cfg"))
     if a.cmd == "info":
         v = arc.version
         print(f"data.arc version {v >> 16}.{(v >> 8) & 0xFF}.{v & 0xFF}, {arc.buckets} buckets")
@@ -306,7 +331,7 @@ def main():
                 f.write(data)
             print(f"  {path} ({len(data)})")
     elif a.cmd == "nro":
-        extract_nros(arc, a.out or os.path.join(a.tree, "dump", "nro"))
+        extract_nros(arc, a.out or os.path.join(ROOT, "dump", "nro"))
 
 
 if __name__ == "__main__":

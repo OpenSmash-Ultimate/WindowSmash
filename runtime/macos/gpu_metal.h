@@ -35,5 +35,9 @@ void overlay_present_metal(id<MTLDevice> dev, id<MTLRenderCommandEncoder> enc, M
 
 /* For tools/mac/gfxtest.m (and debugging): a render target's pixels as the GPU has them now, read
  * back (waits for the GPU) into out (rows of width * bytes per pixel, at most `size` bytes). Its
- * size and Metal pixel format go to *w, *h, *format. 0 if there is no such surface. */
+ * size on the host (the render scale's) and Metal pixel format go to *w, *h, *format. 0 if there
+ * is no such surface. */
 int gfx_metal_read_surface(u64 guest, int depth, void *out, u32 size, u32 *w, u32 *h, u32 *format);
+/* For tools/mac/gfxtest.m: render targets made from now on are `scale` times the game's size, as
+ * display.ini's render_scale makes every one (those made before keep theirs). */
+void gfx_metal_set_render_scale(float scale);

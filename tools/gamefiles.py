@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """What a folder of game files holds, for the build and the installer: the game's NCAs - which
-one is the program, the base, the update, the DLC - and the version; and whether the program's
-data is an early release's, which WindowSmash can't read yet (tools/arc.py table_form).
+one is the program, the base, the update, the DLC - and the version; and whether that is the
+version WindowSmash needs, 13.0.5 (tools/game_version.py scan_problem).
 
 Usage:
   gamefiles.py <folder> --keys <dir> [--json]
@@ -28,6 +28,7 @@ import struct
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import game_version  # noqa: E402
 from nca import Nca, nsp_ncas, pfs0_entries, romfs_entries  # noqa: E402
 
 APP_ID = 0x01006A800016E000   # Super Smash Bros. Ultimate
@@ -124,7 +125,7 @@ def describe_nca(nca, path, name, container=None):
     rec = {"path": path, "name": name, "container": container, "type": CONTENT_TYPES.get(nca.content_type, str(nca.content_type)),
            "title_id": f"{nca.title_id:016X}", "app": f"{app_of(nca.title_id):016X}", "kind": kind_of(nca.title_id),
            "content_id": name[:32].lower() if len(name) >= 36 and name[32:].lower() in (".nca", ".cnmt.nca") else None,
-           "size": nca.size, "version": None, "display_version": None, "game": None, "romfs": None, "data_arc": None}
+           "size": nca.size, "version": None, "display_version": None, "game": None, "romfs": None, "data_version": None}
     if nca.content_type == 0:
         sec = nca.section(0)
         rec["romfs"] = None if sec is None else "plain" if nca.plaintext else ROMFS_STATES.get(sec.enc_type, "encrypted")
@@ -133,29 +134,17 @@ def describe_nca(nca, path, name, container=None):
     return rec
 
 
-def data_arc_form(sec):
-    """[form, layout] of data.arc's file table in a program's RomFS section (arc.table_form), or
-    None when it can't be told."""
+def data_arc_version(sec):
+    """The game version of data.arc in a program's RomFS section, as the game shows it (13.0.5);
+    "" for an early release's, whose table has no version (tools/arc.py data_version); None when
+    it can't be told."""
     try:
-        from arc import data_arc_offset, table_form
+        from arc import data_arc_offset, data_version
         base = data_arc_offset(sec)
-        return list(table_form(lambda off, size: sec.read(base + off, size))[:2])
+        v = data_version(lambda off, size: sec.read(base + off, size))
+        return "" if v is None else game_version.version_text(v)
     except (SystemExit, ImportError, NotImplementedError, OSError, ValueError, struct.error):
         return None
-
-
-def early_release(program):
-    """Why a program's own data can't be used, for a person, or None: an early release, whose
-    data.arc tools/arc.py does not read (an update's data is a patch: told after it is applied)."""
-    form = program.get("data_arc")
-    if not form:
-        return None
-    from arc import form_text, readable
-    if readable(*form):
-        return None
-    version = program["display_version"] or (version_string(program["version"]) if program["version"] is not None else None)
-    return (f"this is an early release of the game{f' ({version})' if version else ''}, whose data WindowSmash can't "
-            f"read yet ({form_text(*form)}): add the game's update (an .nsp file; the newest you have) to this folder")
 
 
 META_KINDS = {0x80: "base", 0x81: "update", 0x82: "dlc"}   # a .cnmt's content meta type
@@ -214,7 +203,7 @@ def scan(folder, keys, depth=1):
         try:
             rec = describe_nca(nca, path, name, container)
             if rec["romfs"] in ("plain", "encrypted") and int(rec["app"], 16) == APP_ID:
-                rec["data_arc"] = data_arc_form(nca.section(0))
+                rec["data_version"] = data_arc_version(nca.section(0))
             if nca.content_type == 1:
                 info = cnmt_info(nca)
                 if info:
@@ -239,8 +228,9 @@ def scan(folder, keys, depth=1):
 def pick_program(contents, app=APP_ID):
     """The program record to build from, among a scan's contents: a Program NCA, as a file of its
     own or inside a package (.nsp); of the game's (`app`) when the folder holds several games';
-    the update's rather than the base's; of several updates, the newest the metadata knows; of
-    the same program twice, the file of its own; else the choice must be made by hand."""
+    the update's rather than the base's - but a base with 13.0.5 merged in rather than updates the
+    metadata says are other versions; of several updates, 13.0.5's, else the newest the metadata
+    knows; of the same program twice, the file of its own; else the choice must be made by hand."""
     programs = [c for c in contents if c["type"] == "program"]
     if not programs:
         raise Error("there is no Program NCA among them")
@@ -251,9 +241,16 @@ def pick_program(contents, app=APP_ID):
         raise Error("they are the programs of several games (" + ", ".join(sorted({c["app"] for c in programs}))
                     + "), none of them Super Smash Bros. Ultimate's")
     updates = [c for c in programs if c["kind"] == "update"]
+    merged = [c for c in programs if c["kind"] == "base" and c.get("data_version") == game_version.REQUIRED]
+    if updates and merged and all(c["version"] is not None and c["version"] != game_version.UPDATE_TITLE_VERSION
+                                  for c in updates):
+        updates, programs = [], merged   # (a leftover older update next to a 13.0.5 dump)
     if updates:
         programs = updates
-        if len(updates) > 1 and all(c["version"] is not None for c in updates):
+        wanted = [c for c in updates if c["version"] == game_version.UPDATE_TITLE_VERSION]
+        if len(updates) > 1 and wanted:
+            programs = wanted
+        elif len(updates) > 1 and all(c["version"] is not None for c in updates):
             newest = max(c["version"] for c in updates)
             programs = [c for c in updates if c["version"] == newest]
     if len(programs) > 1:   # the same program twice: one content id, or one known version
@@ -291,7 +288,8 @@ def summary(result, app=APP_ID):
         if c["type"] != "program":
             continue
         what = "the game (base)" if c["kind"] == "base" else "the game's update"
-        version = c["display_version"] or (version_string(c["version"]) if c["version"] is not None else "version unknown")
+        version = game_version.program_version(c) or (version_string(c["version"]) if c["version"] is not None
+                                                        else "version unknown")
         where = f"{c['name']} in {c['container']}" if c["container"] else c["name"]
         state = {"plain": "readable in place", "encrypted": "encrypted, will be decrypted",
                  "patch": "a patch over the base"}.get(c["romfs"], "no game data inside")
@@ -324,7 +322,7 @@ def main():
     result = scan(a.folder, a.keys)
     try:
         program = pick_program(result["contents"])
-        problem = early_release(program)
+        problem = game_version.scan_problem(program)
         if problem:   # (the installer's window then says so, before the build starts)
             program = None
     except Error as e:

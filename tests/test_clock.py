@@ -16,7 +16,7 @@ import cc  # noqa: E402
 HAVE_CLANG = os.name == 'nt' and (os.path.exists(cc.CLANG) or shutil.which(cc.CLANG) is not None)
 
 
-@unittest.skipUnless(HAVE_CLANG, 'needs Windows and clang-cl (Visual Studio\'s C++ Clang tools)')
+@unittest.skipUnless(HAVE_CLANG, 'needs Windows and clang-cl (deps\\llvm, or Visual Studio\'s C++ Clang tools)')
 class ClockTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -24,8 +24,9 @@ class ClockTests(unittest.TestCase):
         cls.exe = {}
         for name, extra in (('plain', []), ('slow', ['/DSLOW_QPC'])):
             exe = os.path.join(cls.dir, 'clocktest_%s.exe' % name)
-            r = subprocess.run([cc.CLANG, '/nologo', '/O2', *cc.BASE_CFLAGS, *extra, str(ROOT / 'tools' / 'dev' / 'clocktest.c'),
-                                '/Fe' + exe, '/Fo' + os.path.join(cls.dir, name + '.obj')], capture_output=True, text=True)
+            r = subprocess.run([cc.CLANG, '/nologo', '/O2', *cc.LINK_FLAGS, *cc.BASE_CFLAGS, *extra, str(ROOT / 'tools' / 'dev' / 'clocktest.c'),
+                                '/Fe' + exe, '/Fo' + os.path.join(cls.dir, name + '.obj'), '/link', *cc.LINK_OPTIONS],
+                               capture_output=True, text=True)
             if r.returncode:
                 raise AssertionError('clocktest.c did not build:\n' + r.stdout + r.stderr)
             cls.exe[name] = exe

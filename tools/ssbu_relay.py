@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Netplay lobby for the SSBU native port: the server every player's game joins to play online.
 
-Players' games join it at start (Play SSBU.bat). A room anyone creates in Local Wireless is listed
-to every player of the same game version and lobby code, who join it from the game's Rooms List;
+Players' games join it at start (Play SSBU.bat). A game that isn't version 13.0.5 is refused, with a
+message the game shows (WindowSmash plays 13.0.5 only: REQUIRED_BUILD). A room anyone creates in
+Local Wireless is listed to every player of the same lobby code, who join it from the game's Rooms List;
 the lobby then carries the room's traffic between its players only. Players only send to the
 lobby, so nobody needs port forwarding; the lobby's machine needs its UDP port open. Players in
 the same room whose games can do it are also introduced to each other, so their games can send the
@@ -31,6 +32,9 @@ JOIN, WELCOME, REJECT, PING, PONG, DATA, MEMBERS, LEAVE, LIST, LISTING, LIST_END
 PEERS, BCAST, PUNCH, DIRECT = range(12, 16)   # (direct connections; PUNCH and DIRECT go between players)
 NAME_LEN = 32
 BUILD_LEN = 40
+# 13.0.5's main module build id (tools/game_version.py MAIN_BUILD_ID; this file is deployed on its own)
+REQUIRED_BUILD = b"21450C647B8C5940ED5B68218EA128FD3C5D597D"
+NOT_13 = "WindowSmash needs game 13.0.5: run the installer again"   # (a REJECT's text: 63 bytes at most)
 JOIN_SIZE = 4 + 8 + 2 * NAME_LEN + BUILD_LEN
 V1_JOIN_SIZE = 4 + 8 + 2 * NAME_LEN
 PING_SIZE = 4 + 8 + 8 + 8 + 2
@@ -449,6 +453,12 @@ class Lobby(asyncio.DatagramProtocol):
             if not self.gate(at, now):
                 self.drops["join rate"] += 1
                 return
+            if build.upper() != REQUIRED_BUILD:   # (another game version: refused, saying why)
+                self.drops["game version"] += 1
+                self.log(f"refused {printable(name)} from {at[0]}:{at[1]}: build {build[:8].decode('ascii', 'replace')}, "
+                         "not 13.0.5's")
+                self.reject(at, nonce, 4, NOT_13)
+                return
             why = ("the lobby is full" if len(self.by_addr) >= self.o.max_clients or self.pending >= self.o.max_pending
                    else f"too many players from your address ({self.o.per_ip})" if self.per_ip[at[0]] >= self.o.per_ip
                    else None)
@@ -853,7 +863,8 @@ def parse_args(argv=None):
     a.add_argument("--stats", type=float, default=d.stats, help="seconds between statistics lines (0: none; default %(default)s)")
     a.add_argument("--probe", metavar="HOST[:PORT]", help="instead of serving: check the lobby at this address")
     a.add_argument("--room", default="smash", help="(--probe) the lobby code (default: the public lobby)")
-    a.add_argument("--build", default="", help="(--probe) the game build id to look at (see version.txt)")
+    a.add_argument("--build", default=REQUIRED_BUILD.decode(), help="(--probe) the game build id to join with "
+                   "(default: 13.0.5's, the one the lobby lets in)")
     args = a.parse_args(argv)
     for k, v in vars(args).items():
         setattr(d, k, v)

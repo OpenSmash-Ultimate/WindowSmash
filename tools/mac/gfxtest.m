@@ -26,6 +26,9 @@
  *   many frames of many draws (upload memory recycled as the GPU finishes, work committed as it grows)
  *   presenting into a CAMetalLayer of its own (offscreen), with the overlay; the screenshot; the
  *     overlay itself, drawn into a target of its own; the disk cache's MSL
+ *   render scale: targets made twice the game's size (and 1.5 times), with viewports, scissors,
+ *     the fragment position and texel numbers in the game's pixels; the picture presented at its
+ *     size and shrunk into the window in linear light (SSBU_CAPTURE and SSBU_CAPTURE_WINDOW's files)
  * Run it with MTL_DEBUG_LAYER=1 (and MTL_SHADER_VALIDATION=1) as well: Metal then checks every
  * call; and with DYLD_INSERT_LIBRARIES=/usr/lib/libgmalloc.dylib (Guard Malloc: a use of freed
  * memory crashes - set by env, not through a shell script, which drops DYLD_ variables). The
@@ -89,7 +92,8 @@ void display_fit(unsigned w, unsigned h, unsigned *x, unsigned *y, unsigned *fw,
     *y = (h - *fh) / 2;
 }
 int display_latency(void) { return 2; }
-float display_render_scale(void) { return 1.0f; }
+float display_render_scale(void) { return 1.0f; }   /* (test_scale changes the renderer's: gfx_metal_set_render_scale) */
+int display_window_mode(void) { return DISPLAY_WINDOWED; }
 void display_set_tearing(int supported) { (void)supported; }
 unsigned display_present_flags(void) { return 0; }
 
@@ -147,7 +151,7 @@ static const struct { const char *name, *pattern; } ISA[] = {
     {"ALD", "1110111111011---"}, {"AST", "1110111111110---"}, {"EXIT", "111000110000----"}, {"IPA", "11100000--------"},
     {"IADD_reg", "0101110000010---"}, {"ISCADD_reg", "0101110000011---"}, {"LDG", "1110111011010---"}, {"STG", "1110111011011---"},
     {"MOV_reg", "0101110010011---"}, {"MOV_cbuf", "0100110010011---"}, {"MOV32I", "000000010000----"}, {"NOP", "0101000010110---"},
-    {"S2R", "1111000011001---"}, {"SHL_imm", "0011100-01001---"}, {"TEX", "11000-----------"},
+    {"S2R", "1111000011001---"}, {"SHL_imm", "0011100-01001---"}, {"TEX", "11000-----------"}, {"TLDS", "1101-01---------"},
 };
 #define B_(v, pos, n) (((u64)(v) & ((1ull << (n)) - 1)) << (pos))
 #define D_(r) B_(r, 0, 8)
@@ -247,6 +251,26 @@ static void ps_texture_at(Prog *f, u32 type, float c0, float c1, float c2, u32 l
     I(f, "TEX", D_(0) | A_(0) | BR_(RZ_) | B_(type, 28, 3) | B_(15, 31, 4) | B_(0x40 / 4, 36, 13) | B_(1, 55, 3));   /* (LOD zero) */
     assemble(f);
 }
+/* pixel: its position (IPA of the fragment's x and y: in the game's pixels) to target 0's red and green */
+static void ps_position(Prog *f) {
+    memset(f, 0, sizeof *f);
+    hdr32(f, 0, 0x62 | 3 << 17);
+    hdr32(f, 0x48, 0xF);
+    ipa(f, 0, 0x70); ipa(f, 1, 0x74);
+    I(f, "MOV32I", D_(2) | I32_(0));
+    I(f, "MOV32I", D_(3) | I32_(0x3F800000u));
+    assemble(f);
+}
+/* pixel: texel (5, 9) of the texture at 0x40 (TLDS: a texel by its numbers, at level 0) to target 0 */
+static void ps_texel(Prog *f) {
+    memset(f, 0, sizeof *f);
+    hdr32(f, 0, 0x62 | 3 << 17);
+    hdr32(f, 0x48, 0xF);
+    I(f, "MOV32I", D_(4) | I32_(5));
+    I(f, "MOV32I", D_(5) | I32_(9));
+    I(f, "TLDS", D_(0) | A_(4) | BR_(5) | B_(2, 28, 8) | B_(0x40 / 4, 36, 13) | B_(4, 50, 3) | B_(2, 53, 4) | B_(1, 59, 1));
+    assemble(f);
+}
 /* compute (no header, 32 threads a workgroup): each thread copies its 16 bytes of storage
  * buffer 0 to storage buffer 1 */
 static void cs_copy(Prog *p) {
@@ -290,8 +314,13 @@ static void cs_copy(Prog *p) {
 #define CS_MANY (VA0 + 0x2000000)  /* resident regions, many */
 #define CS_HP_IN  (VA0 + 0xC00000)  /* a resident region in a host page with the CPU's data: its input */
 #define CS_HP_OUT (VA0 + 0xD00000)  /* and its output */
+#define RT_S    (VA0 + 0xE00000)   /* 640x360 RGBA8 at render scale 2: 1280x720 */
+#define RT_F    (VA0 + 0xE10000)   /* 64x64 RGBA32 float at 2 */
+#define RT_P    (VA0 + 0xE20000)   /* 16x16 RGBA8 at 2, sampled texel by texel */
+#define RT_Q    (VA0 + 0xE30000)   /* 16x16 RGBA8 at 2 */
+#define RT_X    (VA0 + 0xE40000)   /* 64x64 RGBA8 at 1.5: 96x96 */
 enum { VS_PASS = 0x0000, VS_CBUF = 0x0400, PS_COLOR = 0x0800, PS_TEXTURE = 0x0C00, CS_COPY_PROG = 0x1000, PS_ARRAY = 0x1400,
-       PS_CUBE_X = 0x1800, PS_CUBE_NZ = 0x1C00, PS_3D = 0x2000, PS_DUAL = 0x2400 };
+       PS_CUBE_X = 0x1800, PS_CUBE_NZ = 0x1C00, PS_3D = 0x2000, PS_DUAL = 0x2400, PS_POSITION = 0x2800, PS_TEXEL = 0x2C00 };
 
 static u32 regs[0x1000];
 static CbBinding cb[STAGES][18];
@@ -988,6 +1017,128 @@ static void test_stress(void) {
     check(gfx_stat_gpu_errors == 0, "no command buffer failed (%llu)", gfx_stat_gpu_errors);
 }
 
+/* A BMP as gpu_metal.m writes them (24-bit, top row first: a negative height): its size, and its
+ * pixel (x, y) as RGBA, alpha 255. */
+static u8 *bmp;
+static i32 bmp_w, bmp_h;
+static int read_bmp(const char *path) {
+    free(bmp);
+    bmp = NULL;
+    bmp_w = bmp_h = 0;
+    FILE *f = fopen(path, "rb");
+    u8 hdr[54];
+    int ok = f && fread(hdr, 1, 54, f) == 54 && hdr[0] == 'B' && hdr[1] == 'M';
+    i32 w = 0, h = 0;
+    if (ok) { memcpy(&w, hdr + 18, 4); memcpy(&h, hdr + 22, 4); }
+    size_t n = ((size_t)w * 3 + 3) / 4 * 4 * (size_t)(h < 0 ? -h : h);
+    ok = ok && w > 0 && n && (bmp = malloc(n)) && fread(bmp, 1, n, f) == n;
+    if (f) fclose(f);
+    if (ok) { bmp_w = w; bmp_h = h; }
+    return ok;
+}
+static u32 bmp_px(u32 x, u32 y) {
+    if (!bmp || x >= (u32)bmp_w || y >= (u32)(bmp_h < 0 ? -bmp_h : bmp_h)) return 0;
+    const u8 *p = bmp + ((size_t)bmp_w * 3 + 3) / 4 * 4 * (bmp_h < 0 ? y : (u32)bmp_h - 1 - y) + x * 3;
+    return RGBA(p[2], p[1], p[0], 255);
+}
+
+/* Render scale: targets made twice the game's size (gpu_metal.m's render_scale, as display.ini's
+ * render_scale = 2 makes every one; 1.5 for a scissor's rounding). What the game gives in its own
+ * pixels - viewports, scissors, the fragment position, texel numbers - lands on the targets' own;
+ * the picture is presented at its size, and shrunk into a smaller window in linear light. Its
+ * present is the run's first, whose picture and window SSBU_CAPTURE saves (main). Only targets of
+ * their own: those of the other tests are made at 1 after it. */
+static void test_scale(void) {
+    printf("render scale\n");
+    static const float WHITE[4] = {1, 1, 1, 1};
+    const u32 white = RGBA(255, 255, 255, 255), black = RGBA(0, 0, 0, 255), red = RGBA(255, 0, 0, 255);
+    remove("captures/frame_000.bmp");
+    remove("captures/window_000.bmp");
+    gfx_metal_set_render_scale(2.0f);
+    /* a viewport of the game's x 0 to 10.5 (of 640): host pixels 0-20 */
+    setup(RT_S, 640, 360, 0, VS_PASS, PS_COLOR);
+    clear_color(0, 0, 0, 0, 1, 0xF);
+    check(read_rt(RT_S, 0) && rt_w == 1280 && rt_h == 720, "a 640x360 target made at 1280x720 (%ux%u)", rt_w, rt_h);
+    vertex(VERTS, 0, -1, -1, 0.5f, WHITE); vertex(VERTS, 1, 3, -1, 0.5f, WHITE); vertex(VERTS, 2, -1, 3, 0.5f, WHITE);
+    stream(VERTS, 3);
+    regs[M_VERTEX_ARRAY_COUNT] = 3;
+    regs[M_VIEWPORT_SCALE(0)] = fbits(5.25f); regs[M_VIEWPORT_SCALE(0) + 3] = fbits(5.25f);
+    check(draw(0), "a draw into a viewport 10.5 pixels wide");
+    read_rt(RT_S, 0);
+    check(px(0, 300) == white && px(20, 300) == white && px(21, 300) == black && px(20, 719) == white,
+          "the viewport is host pixels 0-20 (%08x %08x %08x)", px(0, 300), px(20, 300), px(21, 300));
+    /* a scissor of the game's x 100-110, y 20-30: host 200-220, 40-60 */
+    viewport(640, 360);
+    regs[M_SCISSOR(0)] = 1; regs[M_SCISSOR(0) + 1] = 100 | 110 << 16; regs[M_SCISSOR(0) + 2] = 20 | 30 << 16;
+    vertex(VERTS, 0, -1, -1, 0.5f, RED); vertex(VERTS, 1, 3, -1, 0.5f, RED); vertex(VERTS, 2, -1, 3, 0.5f, RED);
+    check(draw(0), "a scissored draw");
+    read_rt(RT_S, 0);
+    check(px(200, 40) == red && px(219, 59) == red && px(199, 50) == black && px(220, 50) == black && px(210, 39) == black &&
+          px(210, 60) == black, "the scissor is host pixels 200-219, 40-59 (%08x %08x; outside %08x %08x %08x %08x)", px(200, 40),
+          px(219, 59), px(199, 50), px(220, 50), px(210, 39), px(210, 60));
+
+    /* the fragment position, in the game's pixels: host pixel (21, 40)'s centre is (10.75, 20.25);
+     * with the origin at the lower left, y counts up from the game's 64 */
+    setup(RT_F, 64, 64, 0, VS_PASS, PS_POSITION);
+    target(0, RT_F, 64, 64, 0xC0);   /* RGBA32 float */
+    stream(VERTS, 3);
+    regs[M_VERTEX_ARRAY_COUNT] = 3;
+    float at[4] = {0};
+    for (int lower_left = 0; lower_left < 2; lower_left++) {
+        regs[M_WINDOW_ORIGIN] = lower_left;
+        check(draw(0), "a draw writing its position%s", lower_left ? ", the origin at the lower left" : "");
+        check(read_rt(RT_F, 0) && rt_w == 128, "into a 64x64 float target, 128x128 (%ux%u)", rt_w, rt_h);
+        memcpy(at, rt_pixels + ((size_t)40 * rt_w + 21) * 16, 16);
+        check(at[0] == 10.75f && at[1] == (lower_left ? 64 - 20.25f : 20.25f), "host pixel (21, 40) is the game's (%g, %g)", at[0], at[1]);
+    }
+
+    /* a texel by its numbers (TLDS) from a scaled target: the game's texel, whatever the target's own */
+    textured_setup();
+    target(0, RT_P, 16, 16, 0xD5);   /* (not textured_setup's RT_T: the other tests make that one at 1) */
+    texture_header(0x08, 2, 16, 16);
+    write_rgba8_texture(0);
+    check(draw(0), "a 16x16 texture drawn into a 16x16 target, 32x32");
+    read_rt(RT_P, 0);
+    check(rt_w == 32 && px(10, 18) == texel(5, 9, 0) && px(11, 19) == texel(5, 9, 0) && px(9, 17) == texel(4, 8, 0),
+          "each texel 2x2 host pixels (%08x %08x %08x)", px(10, 18), px(11, 19), px(9, 17));
+    regs[M_PIPELINE(5) + 1] = PS_TEXEL;
+    target(0, RT_Q, 16, 16, 0xD5);
+    texture_address(RT_P);
+    check(draw(0), "a draw fetching texel (5, 9) of that target");
+    read_rt(RT_Q, 0);
+    check(px(0, 0) == texel(5, 9, 0) && px(31, 31) == texel(5, 9, 0), "the game's texel (5, 9): %08x, want %08x (the host's (5, 9) is %08x)",
+          px(0, 0), texel(5, 9, 0), texel(2, 4, 0));
+
+    /* at 1.5 a 64x64 target is 96x96, and a scissor's edges go outwards: x 11-21 is 16.5-31.5, so 16-31 */
+    gfx_metal_set_render_scale(1.5f);
+    setup(RT_X, 64, 64, 0, VS_PASS, PS_COLOR);
+    clear_color(0, 0, 0, 0, 1, 0xF);
+    vertex(VERTS, 0, -1, -1, 0.5f, RED); vertex(VERTS, 1, 3, -1, 0.5f, RED); vertex(VERTS, 2, -1, 3, 0.5f, RED);
+    stream(VERTS, 3);
+    regs[M_VERTEX_ARRAY_COUNT] = 3;
+    regs[M_SCISSOR(0)] = 1; regs[M_SCISSOR(0) + 1] = 11 | 21 << 16; regs[M_SCISSOR(0) + 2] = 0 | 64 << 16;
+    check(draw(0), "a scissored draw at 1.5");
+    read_rt(RT_X, 0);
+    check(rt_w == 96 && px(15, 50) == black && px(16, 50) == red && px(31, 50) == red && px(32, 50) == black,
+          "96x96 (%ux%u), the scissor host pixels 16-31 (%08x %08x %08x %08x)", rt_w, rt_h, px(15, 50), px(16, 50), px(31, 50), px(32, 50));
+    gfx_metal_set_render_scale(1.0f);
+
+    /* presented: the picture at its own size, 1280x720, and the 640x360 window's, each of its pixels
+     * two of the picture's averaged in linear light - at the viewport's edge, white and black: 188,
+     * not 128 */
+    gfx_present(gpu_va_to_guest(RT_S), 640, 360);
+    check(read_bmp("captures/frame_000.bmp") && bmp_w == 1280 && bmp_h == -720, "the picture saved at 1280x720 (%dx%d)", bmp_w, bmp_h);
+    check(bmp_px(20, 300) == white && bmp_px(21, 300) == black && bmp_px(200, 40) == red && bmp_px(199, 40) == black,
+          "pixel for pixel the target (%08x %08x %08x %08x)", bmp_px(20, 300), bmp_px(21, 300), bmp_px(200, 40), bmp_px(199, 40));
+    check(read_bmp("captures/window_000.bmp") && bmp_w == 640 && bmp_h == -360, "the window saved, 640x360 (%dx%d)", bmp_w, bmp_h);
+    check(bmp_px(9, 300) == white && rgba_near(bmp_px(10, 300), RGBA(188, 188, 188, 255), 2) && bmp_px(11, 300) == black,
+          "shrunk in linear light: white, the edge %08x (188: half the light), black (%08x, %08x)", bmp_px(10, 300), bmp_px(9, 300),
+          bmp_px(11, 300));
+    check(bmp_px(100, 20) == red && bmp_px(109, 29) == red && bmp_px(99, 25) == black && bmp_px(110, 25) == black,
+          "the scissored block at half its size (%08x %08x; beside it %08x %08x)", bmp_px(100, 20), bmp_px(109, 29), bmp_px(99, 25),
+          bmp_px(110, 25));
+}
+
 /* The game's picture into the layer, and the F3 screenshot of it. */
 static void test_present(void) {
     printf("presenting\n");
@@ -1006,18 +1157,8 @@ static void test_present(void) {
         if (strstr(e->d_name, ".bmp")) snprintf(path, sizeof path, "screenshots/%s", e->d_name);
     if (d) closedir(d);
     check(path[0] != 0, "F3 saved a screenshot (%s)", path);
-    FILE *f = path[0] ? fopen(path, "rb") : NULL;
-    u8 hdr[54] = {0};
-    int ok = f && fread(hdr, 1, 54, f) == 54;
-    i32 w, h;
-    memcpy(&w, hdr + 18, 4);
-    memcpy(&h, hdr + 22, 4);
-    check(ok && hdr[0] == 'B' && w == 1920 && h == -1080, "a 1920x1080 BMP (%dx%d)", w, h);
-    u8 pxl[3] = {0};
-    if (ok) { fseek(f, 54 + (540L * 1920 + 960) * 3, SEEK_SET); ok = fread(pxl, 1, 3, f) == 3; }
-    if (f) fclose(f);
-    check(ok && near(pxl[2], 64, 1) && near(pxl[1], 128, 1) && near(pxl[0], 191, 1), "the picture's middle the target's colour (%u %u %u)", pxl[2],
-          pxl[1], pxl[0]);
+    check(read_bmp(path) && bmp_w == 64 && bmp_h == -64, "a 64x64 BMP: the picture is the presented target's size (%dx%d)", bmp_w, bmp_h);
+    check(rgba_near(bmp_px(32, 32), RGBA(64, 128, 191, 255), 1), "the picture's middle the target's colour (%08x)", bmp_px(32, 32));
 }
 
 /* The overlay (gpu_metal_overlay.m) over a white target of its own: its panel darkens it, its text
@@ -1073,7 +1214,7 @@ static void test_cache(void) {
         if (f) fclose(f);
     }
     if (d) closedir(d);
-    check(files == 11 && good == files, "%d MSL files written (11: 10 programs - ps_color for both vertex programs, whose outputs are "
+    check(files == 13 && good == files, "%d MSL files written (13: 12 programs - ps_color for both vertex programs, whose outputs are "
           "alike - and ps_color's alpha-tested variant), %d of them whole", files, good);
 }
 
@@ -1240,6 +1381,15 @@ int main(int argc, char **argv) {
         ps_texture_at(&p, TEX_CUBE, 0, 0, -1, 0); place(PS_CUBE_NZ, &p, 0);
         ps_texture_at(&p, TEX_3D, 0.5f, 0.5f, 0.625f, 0); place(PS_3D, &p, 0);
         ps_dual(&p); place(PS_DUAL, &p, 0);
+        ps_position(&p); place(PS_POSITION, &p, 0);
+        ps_texel(&p); place(PS_TEXEL, &p, 0);
+        /* SSBU_CAPTURE: the picture and the window of the run's first present (test_scale's) */
+        mkdir("captures", 0755);
+        setenv("SSBU_CAPTURE", "captures", 1);
+        setenv("SSBU_CAPTURE_WINDOW", "1", 1);
+        setenv("SSBU_CAPTURE_EVERY", "0", 1);
+        setenv("SSBU_CAPTURE_MAX", "1", 1);
+        test_scale();
         test_clears();
         test_triangles();
         test_textures();

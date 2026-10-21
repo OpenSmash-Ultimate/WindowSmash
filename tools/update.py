@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
-"""Apply a game update (a Patch NSP) to the port's data.
+"""Apply the game's 13.0.5 update (a Patch NSP) over the game's own data.
 
 Usage:
-  update.py apply  <update> --base <base romfs.cfg> --keys <dir> --tree <dir>
-  update.py verify <update> --keys <dir> --tree <dir>
+  update.py apply  <update> --base <base romfs.cfg> --keys <dir>
+  update.py verify <update> --keys <dir>
 
 <update> is the update's Patch NSP, an NSP holding the game and its update together (the update's
 Program NCA is the one whose RomFS is a patch; --inner <name> names it), or its Program NCA on its
 own (a .nca file, or the 00 file of one an emulator installed).
 
-`apply` fills <tree>/dump, a game version's folder laid out like the port's own (dump/, then
-build/, save/, cache/ next to it: tools/recomp.py --tree, the runtime's data dir argument):
+`apply` fills dump/ (what tools/build_game.py step 6 runs):
   exefs/                        the update's ExeFS (main, sdk, subsdk0, rtld, main.npdm)
   modules/romfs_patch.bin       the update's own RomFS data, decrypted
   modules/romfs.layers          where each piece of the updated RomFS comes from: the base's
@@ -47,16 +46,9 @@ With 13.0.5 over a merged 11.0.0 base this confirmed all but 8 of 1,074,277 bloc
 a few models' material and texture files whose original-release bytes are no longer in the
 merged base); those keep the best guess and are listed in romfs.unverified.txt.
 
-The hash tree is part of the patched image too, so an update can reuse the original release's
-hashes for blocks that are the same as in that release (13.0.5 carries all of its own; some
-other updates do not). Such a block has no hash of its own in the update. Over the original
-release that does not matter (the patch applies exactly); over a merged base its pieces keep
-their first choice, and the blocks are checked 512 at a time against the hash over their
-hashes (level 4); where that does not match, their pieces are tried other ways until it does
-(repair). verify checks every block the same way, up to the master hash in the update's header
-if need be (tree_check). Tried with 13.0.5 made to reuse the original's hashes for 305,628
-blocks: over the original release every block confirmed; over a merged 11.0.0, all but 3 of 587
-groups of 512.
+The hash tree is part of the patched image too, so an update could reuse the original release's
+hashes for blocks that are the same as in that release. 13.0.5 carries a hash of its own for
+every block; an update that doesn't is not 13.0.5's, and is refused (Patch.hash_level).
 """
 import argparse
 import bisect
@@ -70,9 +62,11 @@ from collections import defaultdict
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from arc import Arc, data_arc_offset  # noqa: E402
+from game_version import needs  # noqa: E402
 from nca import LAYER_ZERO, Nca, RomfsImage, copy_out, nsp_ncas, pfs0_entries, write_layers  # noqa: E402
 
 ZERO = "zero"        # a piece of zeros
+DUMP = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "dump")
 NODE = 0x4000        # bucket tree node size
 
 
@@ -137,25 +131,22 @@ class Patch:
         if ivfc[:4] != b"IVFC":
             raise SystemExit("no hash tree (IVFC) on the update's RomFS")
         self.levels = [struct.unpack_from("<QQI", ivfc, 0x10 + i * 0x18) for i in range(6)]   # (offset, size, block size log2)
-        self.master = ivfc[0xC0:0xE0]                    # level 1's hash: the top of the tree
         self.l6, self.l6size, blocklog = self.levels[5]
         self.block = 1 << blocklog
         self.blocks = (self.l6size + self.block - 1) // self.block
-        self.hashes, self.known = self.hash_level(4)    # level 5: one SHA-256 per level-6 block
+        self.hashes = self.hash_level(4)    # level 5: one SHA-256 per level-6 block
 
     def hash_level(self, i):
-        """Hash level i + 1 (0 = level 1 ... 4 = level 5) as the update has it, and which of its
-        32-byte entries it carries (1) - the others are the original release's (0, left as zeros)."""
+        """Hash level i + 1 (0 = level 1 ... 4 = level 5), which the update carries whole: one
+        that takes some of it from the original release isn't 13.0.5's (which carries its own)."""
         off, size, _ = self.levels[i]
-        out, known = bytearray(), bytearray(b"\x01") * ((size + 31) // 32)
-        for pv, n, st, ph in self.pieces(off, size):
-            if st == 1:
-                out += self.storage(ph, n)
-            else:
-                out += bytes(n)
-                a, z = (pv - off) // 32, (pv - off + n + 31) // 32
-                known[a:z] = bytes(z - a)
-        return bytes(out), known
+        out = bytearray()
+        for _pv, n, st, ph in self.pieces(off, size):
+            if st != 1:
+                raise SystemExit(needs("this update takes some of its hashes from the original release, "
+                                       "which the 13.0.5 update doesn't"))
+            out += self.storage(ph, n)
+        return bytes(out)
 
     def storage(self, off, size):
         """The patch's own data (section-relative), decrypted: each region has its own counter."""
@@ -192,8 +183,8 @@ class Patch:
         return bytes(out)
 
     def block_hash(self, b):
-        """Level-6 block b's SHA-256, or None if the update reuses the original release's for it."""
-        return self.hashes[b * 32:b * 32 + 32] if self.known[b] else None
+        """Level-6 block b's SHA-256."""
+        return self.hashes[b * 32:b * 32 + 32]
 
 
 # ---- finding the base pieces again --------------------------------------------------------
@@ -270,13 +261,7 @@ class Builder:
         """Whether the base is the release the patch was made for: blocks with base pieces,
         sampled across the image, match the update's hashes when taken as the patch says."""
         self.exact_segments(start)
-        known, blocks = self.p.known, set()
-        for s in self.segs:
-            if s.kind == 0:   # (each piece's first block whose hash the update carries)
-                b = known.find(1, (s.v - self.l6) // self.p.block, (s.e - 1 - self.l6) // self.p.block + 1)
-                if b >= 0:
-                    blocks.add(b)
-        blocks = sorted(blocks)
+        blocks = sorted({(s.v - self.l6) // self.p.block for s in self.segs if s.kind == 0})   # (each piece's first)
         sample = blocks[::max(1, len(blocks) // samples)]
         return bool(sample) and all(self.ok(b, {}) for b in sample)
 
@@ -420,12 +405,8 @@ class Builder:
         return s.pick if s.pick is not None else (s.cands[0] if s.cands else None)
 
     def ok(self, b, picks):
-        """Whether block b matches its hash with these choices; None if the update has no hash
-        of its own for it (the original release's: verify checks it through the levels above)."""
-        want = self.p.block_hash(b)
-        if want is None:
-            return None
-        return self.digest(b, picks) == want
+        """Whether block b matches its hash with these choices."""
+        return self.digest(b, picks) == self.p.block_hash(b)
 
     def digest(self, b, picks):
         """Block b's SHA-256 with these choices (the others as they are)."""
@@ -461,13 +442,7 @@ class Builder:
         for b in range(self.p.blocks):
             v0, v1, ks = self.in_block(b)
             open_ = [k for k in ks if self.segs[k].kind == 0 and k not in decided]
-            found = self.ok(b, {})
-            if found is None:   # no hash of its own in the update: the first choices, left undecided
-                for k in open_:   # (a later block may still decide them; verify checks the result)
-                    if self.segs[k].pick is None:
-                        self.segs[k].pick = self.choice(k)
-                continue
-            if found:
+            if self.ok(b, {}):
                 picks = {}
             else:
                 opts = [self.distinct(k, b, self.segs[k].cands) or [None] for k in open_]
@@ -606,114 +581,6 @@ class Builder:
                     return False
         return False
 
-    # 2b. blocks with the original release's hashes
-    def own_hash(self, s):
-        """Whether piece s is in a block whose hash the update carries (where it was checked)."""
-        b0, b1 = (s.v - self.l6) // self.p.block, (s.e - 1 - self.l6) // self.p.block
-        return self.p.known.find(1, b0, b1 + 1) >= 0
-
-    def repair(self):
-        """Blocks with the original release's hashes are checked 512 at a time, against the
-        level-4 hash over their 16 KB of level-5 hashes. Where that does not match, the pieces in
-        them that no block with a hash of its own covers are taken another way - all by one
-        shift (neighbouring files moved together), then each on its own - until it does."""
-        p, t0 = self.p, time.time()
-        fan = (1 << p.levels[4][2]) // 32               # level-5 hashes per level-4 hash
-        l4, l4_known = p.hash_level(3)
-        groups = sorted({b // fan for b in range(p.blocks) if not p.known[b]})
-        groups = [j for j in groups if l4_known[j]]     # (a level-4 hash the update lacks too: only verify checks those)
-        if not groups:
-            return
-        self.digests = {}
-
-        def group_ok(j):
-            e0, e1 = j * fan, min((j + 1) * fan, p.blocks)
-            hashes = bytearray(p.hashes[e0 * 32:(e0 + fan) * 32])
-            for e in range(e0, e1):
-                if not p.known[e]:
-                    if e not in self.digests:
-                        self.digests[e] = self.digest(e, {})
-                    hashes[(e - e0) * 32:(e - e0 + 1) * 32] = self.digests[e]
-            return hashlib.sha256(hashes).digest() == l4[j * 32:j * 32 + 32]
-        status = {j: group_ok(j) for j in groups}
-        failed = [j for j in groups if not status[j]]
-        log(f"blocks with the original release's hashes, 512 at a time: {len(groups) - len(failed):,} of {len(groups):,} "
-            f"groups confirmed ({time.time() - t0:.0f}s)")
-        if not failed:
-            return
-        span = fan * p.block   # (each failed group's pieces cut at its edges: a change stays in the group)
-        self.cut({self.l6 + j * span for j in failed} | {min(self.l6 + (j + 1) * span, self.l6 + p.l6size) for j in failed})
-        pts = sorted((s.orig, s.pick + s.v - s.orig) for s in self.segs if s.kind == 0 and isinstance(s.pick, int))
-        ps = [q[0] for q in pts]
-        until = time.time() + 600   # (several pieces at once only for so long: past that, verify lists them)
-        fixed = sum(self.repair_group(j, fan, group_ok, status, pts, ps, until) for j in failed)
-        log(f"  {fixed} of {len(failed)} more confirmed ({time.time() - t0:.0f}s)")
-
-    def repair_group(self, j, fan, group_ok, status, pts, ps, until):
-        """Group j (level-4 hash j) made to match, if a change of one to three pieces does it."""
-        p = self.p
-        v0 = self.l6 + j * fan * p.block
-        v1 = min(v0 + fan * p.block, self.l6 + p.l6size)
-        k = bisect.bisect_right(self.sv, v0) - 1
-        suspects = []
-        while k < len(self.segs) and self.segs[k].v < v1:
-            s = self.segs[k]
-            if s.kind == 0 and not self.own_hash(s):
-                suspects.append(k)
-            k += 1
-
-        def blocks(k):
-            s = self.segs[k]
-            return range((s.v - self.l6) // p.block, (s.e - 1 - self.l6) // p.block + 1)
-
-        def attempt(picks):
-            old = {k: self.segs[k].pick for k in picks}
-            touched = {b for k in picks for b in blocks(k)}
-            saved = {b: self.digests.pop(b) for b in touched if b in self.digests}
-            for k, d in picks.items():
-                self.segs[k].pick = d
-            others = {b // fan for b in touched} - {j}
-            if group_ok(j) and all(group_ok(g) for g in others if status.get(g)):
-                status[j] = True
-                return True
-            for k, d in old.items():
-                self.segs[k].pick = d
-            for b in touched:
-                self.digests.pop(b, None)
-            self.digests.update(saved)
-            return False
-        opts = {}   # piece -> the other choices that give other bytes
-        for k in suspects:
-            s = self.segs[k]
-            first = max(blocks(k)[0], j * fan)
-            c = [s.pick] + s.cands + self.nearby(s, pts, ps) + self.duplicates(s, set()) + [ZERO]
-            other = self.distinct(k, first, list(dict.fromkeys(c, None)))[1:]
-            if other:
-                opts[k] = other
-        # the likeliest wrong first: pieces nothing was found for (zeros), then the smallest (a small
-        # file has many of the same sizes in the base)
-        ranked = sorted(opts, key=lambda k: (self.segs[k].pick not in (None, ZERO), self.segs[k].e - self.segs[k].v))
-        for k in ranked:   # one piece
-            for d in opts[k]:
-                if attempt({k: d}):
-                    return True
-        shifts = [self.segs[k].v + d - self.segs[k].orig for k in ranked for d in opts[k] if isinstance(d, int)]
-        for dm in list(dict.fromkeys(shifts))[:200]:   # all by one shift
-            if attempt({k: self.segs[k].orig + dm - self.segs[k].v for k in suspects}):
-                return True
-        for r, top, alts in ((2, 40, 6), (3, 15, 3)):   # two, then three pieces at once, within a budget
-            moves = [(k, d) for k in ranked[:top] for d in opts[k][:alts]]
-            tries = 0
-            for combo in itertools.combinations(moves, r):
-                if len({k for k, _d in combo}) < r:
-                    continue
-                if attempt(dict(combo)):
-                    return True
-                tries += 1
-                if tries >= 40000 or (tries % 1000 == 0 and time.time() > until):
-                    break
-        return False
-
     # 3. the result
     def layers(self):
         """(image offset, source, source offset) pieces: 0 = the base's file, 1 = romfs_patch.bin."""
@@ -736,46 +603,10 @@ class Builder:
         return out
 
 
-def tree_check(patch, digests):
-    """The level-6 blocks the update's hash tree does not confirm, given `digests` (every block's
-    SHA-256 as read, one after another). A block whose hash the update carries is checked against
-    it. One whose hash is the original release's is checked through the level above: the hash
-    there of the 16 KB of hashes its own is in, worked out with its own from `digests` - or, if the
-    update has the original release's for that one too, the level above that, up to the master
-    hash in the update's header."""
-    hashes, known = patch.hashes, patch.known
-    bad = [b for b in range(patch.blocks) if known[b] and digests[b * 32:b * 32 + 32] != hashes[b * 32:b * 32 + 32]]
-    pending = {b: [(b, b + 1)] for b in range(patch.blocks) if not known[b]}   # entry -> the blocks it stands for
-    level = bytearray(hashes)   # this level's entries: the update's where it carries them, else worked out
-    for b in pending:
-        level[b * 32:b * 32 + 32] = digests[b * 32:b * 32 + 32]
-    i = 4
-    while pending and i >= 0:
-        bs = 1 << patch.levels[i][2]
-        count = (patch.levels[i][1] + bs - 1) // bs   # this level's blocks = entries of the one above
-        data = bytes(level) + bytes(max(0, count * bs - len(level)))   # (the last block padded with zeros)
-        if i:
-            stored, has = patch.hash_level(i - 1)
-        else:
-            stored, has = patch.master + bytes(32 * (count - 1)), b"\x01" + bytes(count - 1)
-        under = defaultdict(list)
-        for e, blocks in pending.items():
-            under[e // (bs // 32)] += blocks
-        level, pending = bytearray(stored), {}
-        for j in range(count):
-            if has[j] and j not in under:
-                continue
-            h = hashlib.sha256(data[j * bs:(j + 1) * bs]).digest()
-            if has[j]:
-                if h != stored[j * 32:j * 32 + 32]:
-                    bad += [b for a, z in under[j] for b in range(a, z)]
-            else:
-                level[j * 32:j * 32 + 32] = h
-                if j in under:
-                    pending[j] = under[j]
-        i -= 1
-    bad += [b for blocks in pending.values() for a, z in blocks for b in range(a, z)]
-    return sorted(bad)
+def unconfirmed(patch, digests):
+    """The level-6 blocks whose SHA-256 in `digests` (every block's, one after another) isn't the
+    one the update has for it."""
+    return [b for b in range(patch.blocks) if digests[b * 32:b * 32 + 32] != patch.hashes[b * 32:b * 32 + 32]]
 
 
 def verify(patch, cfg, report=None):
@@ -789,10 +620,8 @@ def verify(patch, cfg, report=None):
         digests += hashlib.sha256(data).digest()
         if b % 200000 == 0 and b:
             log(f"  verified {b:,} of {patch.blocks:,} blocks ({time.time() - t0:.0f}s)")
-    bad = tree_check(patch, bytes(digests))
-    reused = patch.blocks - sum(patch.known[:patch.blocks])
-    log(f"{patch.blocks - len(bad):,} of {patch.blocks:,} blocks match the update's hash tree; {len(bad)} do not"
-        + (f" ({reused:,} checked through the levels above: the update has the original release's hashes for them)" if reused else ""))
+    bad = unconfirmed(patch, bytes(digests))
+    log(f"{patch.blocks - len(bad):,} of {patch.blocks:,} blocks match the update's hash tree; {len(bad)} do not")
     if report:
         if bad:
             with open(report, "w", newline="\n") as f:
@@ -823,19 +652,19 @@ def open_patch(nsp, keydir, inner=None):
     return patch
 
 
-def apply_exefs(patch, tree):
-    """The update's ExeFS into <tree>/dump/exefs."""
+def apply_exefs(patch, dump):
+    """The update's ExeFS into <dump>/exefs."""
     log("ExeFS:")
     for name, off, size in pfs0_entries(patch.exefs):
         log(f"  {name:<12} {size:>10}")
-        copy_out(patch.exefs, off, size, os.path.join(tree, "dump", "exefs", name))
+        copy_out(patch.exefs, off, size, os.path.join(dump, "exefs", name))
 
 
-def apply_romfs(patch, base_cfg, keydir, tree):
-    """The updated RomFS over the base's: <tree>/dump/modules/romfs.cfg and its files.
+def apply_romfs(patch, base_cfg, keydir, dump):
+    """The updated RomFS over the base's: <dump>/modules/romfs.cfg and its files.
     Returns the blocks left unconfirmed."""
     t0 = time.time()
-    modules = os.path.join(tree, "dump", "modules")
+    modules = os.path.join(dump, "modules")
     os.makedirs(modules, exist_ok=True)
     b = Builder(patch, base_cfg, keydir)
     start = b.base_section()
@@ -852,7 +681,6 @@ def apply_romfs(patch, base_cfg, keydir, tree):
         log(f"first pass: {patch.blocks - len(bad):,} of {patch.blocks:,} blocks confirmed ({time.time() - t0:.0f}s)")
         if bad:
             b.solve(bad)
-        b.repair()
 
     layers = b.layers()
     patch_end = max([s.off + (s.e - s.v) for s in b.segs if s.kind == 1] +
@@ -873,8 +701,8 @@ def apply_romfs(patch, base_cfg, keydir, tree):
 
 def apply(a):
     patch = open_patch(a.nsp, a.keys, a.inner)
-    apply_exefs(patch, a.tree)
-    apply_romfs(patch, a.base, a.keys, a.tree)
+    apply_exefs(patch, a.dump)
+    apply_romfs(patch, a.base, a.keys, a.dump)
 
 
 def main():
@@ -882,7 +710,7 @@ def main():
     ap.add_argument("cmd", choices=["apply", "verify"])
     ap.add_argument("nsp", help="the update: a Patch NSP, or its Program NCA (a .nca file, or an installed one's 00 file)")
     ap.add_argument("--keys", required=True, help="folder with prod.keys (and title.keys)")
-    ap.add_argument("--tree", required=True, help="the game version's folder to fill, e.g. v13.0.5")
+    ap.add_argument("--dump", default=DUMP, help=argparse.SUPPRESS)   # (where to write: tests)
     ap.add_argument("--base", help="apply: romfs.cfg of the installed base (e.g. dump/modules/romfs.cfg)")
     ap.add_argument("--inner", help="the update's Program NCA inside the package, by name (a package can hold the "
                                     "game and its update together; without it, the Program NCA with a patch RomFS)")
@@ -893,7 +721,7 @@ def main():
         apply(a)
     else:
         patch = Patch(a.nsp, a.keys, a.inner)
-        modules = os.path.join(a.tree, "dump", "modules")
+        modules = os.path.join(a.dump, "modules")
         sys.exit(1 if verify(patch, os.path.join(modules, "romfs.cfg"), os.path.join(modules, "romfs.unverified.txt")) else 0)
 
 

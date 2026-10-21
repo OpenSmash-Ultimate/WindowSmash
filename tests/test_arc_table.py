@@ -1,6 +1,7 @@
-"""arc.py's file system table forms (table_form): the newer releases' zstd table with the version
-field still reads; an early release's (uncompressed, raw, or an older layout) and a damaged copy
-stop with a plain message, not a traceback. Archives made up here, from the headers' rules."""
+"""arc.py's file system table: 13.0.5's (zstd, with the version field) reads, and its version is
+told from the table's start (data_version); an early release's (uncompressed, raw, or an older
+layout) is not 13.0.5's, and it and a damaged copy stop with a plain message, not a traceback.
+Archives made up here, from the headers' rules."""
 from pathlib import Path
 import contextlib
 import io
@@ -86,8 +87,8 @@ def romfs(data_arc):
     return image + bytes(0x100 - len(image)) + data_arc
 
 
-def readable_arc():
-    table = table_v3(NRO, len(compress(MODULE)), len(MODULE), 3)
+def readable_arc(version=0x0D0005):
+    table = table_v3(NRO, len(compress(MODULE)), len(MODULE), 3, version)
     packed = compress(table)
     return pieces(struct.pack('<4I', 0x10, len(table), len(packed), len(packed) + 0x10), packed,
                   files=compress(MODULE))
@@ -125,12 +126,20 @@ class TableFormTests(unittest.TestCase):
             with self.subTest(want):
                 self.assertEqual(arc.table_form(reader(parts))[:2], want)
                 self.assertFalse(arc.readable(*want))
+                self.assertIsNone(arc.data_version(reader(parts)))
                 with self.assertRaises(SystemExit) as e:
                     arc.Arc(reader(parts))
                 text = str(e.exception.code)
-                self.assertIn('early release', text)
-                self.assertIn("Add the game's update", text)
+                self.assertIn("This game data is not version 13.0.5's", text)
+                self.assertIn("Put the game's 13.0.5 update", text)
                 self.assertIn(f'{want[0]} file table, {want[1]} layout', text)
+
+    def test_data_version(self):
+        self.assertEqual(arc.data_version(reader(readable_arc())), 0x0D0005)
+        self.assertEqual(arc.data_version(reader(readable_arc(0x0B0000))), 0x0B0000)
+        with self.assertRaises(SystemExit) as e:   # (a zstd table header with no table after it)
+            arc.data_version(reader(pieces(zstd_header())))
+        self.assertIn('damaged or incomplete', str(e.exception.code))
 
     def test_damaged_copies(self):
         packed = b'not a zstd frame' * 4    # (what a player's step 8 met: "Unknown frame descriptor")
@@ -160,30 +169,23 @@ class TableFormTests(unittest.TestCase):
             r = subprocess.run([sys.executable, str(ROOT / 'tools' / 'arc.py'), 'nro', '--romfs-cfg', str(cfg),
                                 '--out', str(Path(tmp) / 'nro')], capture_output=True, text=True)
             self.assertEqual(r.returncode, 1)
-            self.assertIn('early release', r.stderr)
+            self.assertIn("not version 13.0.5's", r.stderr)
             self.assertNotIn('Traceback', r.stderr)
 
 
 class WizardTests(unittest.TestCase):
-    """gamefiles: what the installer's window says about a folder with an early release."""
+    """gamefiles: the game version the installer's window reads from a program's own data.arc."""
 
     def section(self, parts):
         image = romfs(flat(parts))
         return types.SimpleNamespace(read=lambda off, size: image[off:off + size])
 
-    def test_data_arc_form(self):
-        self.assertEqual(gamefiles.data_arc_form(self.section(EARLY[('zstd', 'v1')])), ['zstd', 'v1'])
-        self.assertEqual(gamefiles.data_arc_form(self.section(pieces(zstd_header()))), ['zstd', 'v3'])
-        self.assertIsNone(gamefiles.data_arc_form(types.SimpleNamespace(read=lambda off, size: bytes(size))))
-
-    def test_early_release(self):
-        program = {'kind': 'base', 'version': 0, 'display_version': '1.0.0', 'data_arc': ['uncompressed', 'v1']}
-        text = gamefiles.early_release(program)
-        self.assertIn('early release of the game (1.0.0)', text)
-        self.assertIn("add the game's update", text)
-        self.assertIsNone(gamefiles.early_release(dict(program, data_arc=['zstd', 'v3'])))
-        self.assertIsNone(gamefiles.early_release(dict(program, data_arc=None)))   # (an update's, or unknown)
-        self.assertIsNone(gamefiles.early_release({'kind': 'base'}))               # (records without it)
+    def test_data_arc_version(self):
+        self.assertEqual(gamefiles.data_arc_version(self.section(readable_arc())), '13.0.5')
+        self.assertEqual(gamefiles.data_arc_version(self.section(readable_arc(0x0B0000))), '11.0.0')
+        self.assertEqual(gamefiles.data_arc_version(self.section(EARLY[('zstd', 'v1')])), '')   # (an early release)
+        self.assertIsNone(gamefiles.data_arc_version(self.section(pieces(zstd_header()))))     # (damaged: not told)
+        self.assertIsNone(gamefiles.data_arc_version(types.SimpleNamespace(read=lambda off, size: bytes(size))))
 
 
 if __name__ == '__main__':

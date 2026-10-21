@@ -197,6 +197,7 @@ static void start(void);
 int net_configured(void) { start(); return configured; }
 int net_log(void) { configure(); return logging; }
 const char *net_player_name(void) { configure(); return name; }
+const char *net_relay_address(void) { configure(); return !hosting && relay_text[0] ? relay_text : NULL; }
 
 /* ---- the relay (host mode) ------------------------------------------------------------ */
 typedef struct Member { struct sockaddr_in at; u64 nonce, seen; u32 ip; char name[NAME_LEN + 1]; } Member;

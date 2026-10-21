@@ -2,15 +2,16 @@
  *
  * Players 1-8 are Pro Controllers ("full key" style) driven by the pads of hle_pad.c (any pad
  * SDL3 knows, or XInput pads without it); the console layout is positional by default, so the
- * Xbox A (bottom) is the console's B, and so on. The keyboard adds to one player (player 1 unless
- * controllers.ini says otherwise). Motion sensors report a controller at rest; the touch screen
- * reports no touches; rumble goes to the player's pad. */
+ * Xbox A (bottom) is the console's B, and so on. A GameCube controller plays as one (the Gc style,
+ * with its analog triggers and its motor), so the game uses its GameCube controls. The keyboard
+ * adds to one player (player 1 unless controllers.ini says otherwise). Motion sensors report a
+ * controller at rest; the touch screen reports no touches; rumble goes to the player's pad. */
 #define _CRT_SECURE_NO_WARNINGS
 #include <stdio.h>
 
 #include "pad.h"
 
-enum { STYLE_FULLKEY = 1u << 0 };
+enum { STYLE_FULLKEY = 1u << 0, STYLE_GC = 1u << 5 };
 enum { NPAD_NO1 = 0, NPAD_HANDHELD = 0x20 };
 enum { ATTR_CONNECTED = 1u << 0, ATTR_WIRED = 1u << 1 };
 enum {   /* nn::hid::NpadButton */
@@ -28,6 +29,13 @@ static int pad_connected(u32 id) {
     if (id >= PAD_SLOTS) return 0;
     PadState p;
     return pad_get(id, &p) || (int)id == pad_keyboard_slot() || (id == NPAD_NO1 && scripted);
+}
+
+/* The player's style: a GameCube controller while its pad plays as one, else a Pro Controller. */
+static u32 pad_style(u32 id) {
+    if (!pad_connected(id)) return 0;
+    PadState p;
+    return pad_get(id, &p) && p.gc ? STYLE_GC : STYLE_FULLKEY;
 }
 
 static const char *const BUTTON_NAMES[] = {"A", "B", "X", "Y", "LSTICK", "RSTICK", "L", "R", "ZL", "ZR", "PLUS", "MINUS",
@@ -99,17 +107,21 @@ static u64 keyboard_buttons(i32 *lx, i32 *ly, i32 *rx, i32 *ry) {
     return buttons;
 }
 
-/* State shared by every style: { s64 sampling; u64 buttons; s32 lx, ly; s32 rx, ry; u32 attributes; u32 reserved } */
-static void npad_state(u64 out, u32 id) {
+/* State shared by every style: { s64 sampling; u64 buttons; s32 lx, ly; s32 rx, ry; u32 attributes; u32 reserved }.
+ * The attributes say connected only in the player's own style. A GameCube state goes on with
+ * { u32 trigger l, trigger r (0..32767); u32 reserved }: the game presses L and R itself when a
+ * trigger is past 0x27FF, whatever the buttons say, so the keyboard's L and R pull them fully. */
+static void npad_state(u64 out, u32 id, u32 style) {
     u64 buttons = 0;
-    i32 lx = 0, ly = 0, rx = 0, ry = 0;
+    i32 lx = 0, ly = 0, rx = 0, ry = 0, lt = 0, rt = 0;
     u32 attributes = 0;
-    if (pad_connected(id)) {
+    if (style && pad_style(id) == style) {
         attributes = ATTR_CONNECTED | ATTR_WIRED;
         PadState p;
         if (pad_get(id, &p) && (pad_background() || gfx_window_focused())) {
             buttons = p.buttons;
             lx = p.lx; ly = p.ly; rx = p.rx; ry = p.ry;
+            lt = p.lt; rt = p.rt;
         }
         if (id == NPAD_NO1) buttons |= scripted_buttons(&lx, &ly);
         if ((int)id == pad_keyboard_slot()) buttons |= keyboard_buttons(&lx, &ly, &rx, &ry);
@@ -132,16 +144,22 @@ static void npad_state(u64 out, u32 id) {
     st32(out + 24, (u32)rx); st32(out + 28, (u32)ry);
     st32(out + 32, attributes);
     st32(out + 36, 0);
+    if (style == STYLE_GC) {
+        if (buttons & 1ull << B_L) lt = 32767;
+        if (buttons & 1ull << B_R) rt = 32767;
+        st32(out + 40, (u32)lt); st32(out + 44, (u32)rt);
+        st32(out + 48, 0);
+    }
 }
 
-HLE(_ZN2nn3hid12GetNpadStateEPNS0_16NpadFullKeyStateERKj) { npad_state(c->x[0], ld32(c->x[1])); }
-HLE(_ZN2nn3hid12GetNpadStateEPNS0_17NpadHandheldStateERKj) { npad_state(c->x[0], ld32(c->x[1])); st32(c->x[0] + 32, 0); }
-HLE(_ZN2nn3hid12GetNpadStateEPNS0_16NpadJoyDualStateERKj) { npad_state(c->x[0], ld32(c->x[1])); st32(c->x[0] + 32, 0); }
-HLE(_ZN2nn3hid12GetNpadStateEPNS0_16NpadJoyLeftStateERKj) { npad_state(c->x[0], ld32(c->x[1])); st32(c->x[0] + 32, 0); }
-HLE(_ZN2nn3hid12GetNpadStateEPNS0_17NpadJoyRightStateERKj) { npad_state(c->x[0], ld32(c->x[1])); st32(c->x[0] + 32, 0); }
-HLE(_ZN2nn3hid12GetNpadStateEPNS0_11NpadGcStateERKj) { npad_state(c->x[0], ld32(c->x[1])); st32(c->x[0] + 32, 0); }
+HLE(_ZN2nn3hid12GetNpadStateEPNS0_16NpadFullKeyStateERKj) { npad_state(c->x[0], ld32(c->x[1]), STYLE_FULLKEY); }
+HLE(_ZN2nn3hid12GetNpadStateEPNS0_17NpadHandheldStateERKj) { npad_state(c->x[0], ld32(c->x[1]), 0); }
+HLE(_ZN2nn3hid12GetNpadStateEPNS0_16NpadJoyDualStateERKj) { npad_state(c->x[0], ld32(c->x[1]), 0); }
+HLE(_ZN2nn3hid12GetNpadStateEPNS0_16NpadJoyLeftStateERKj) { npad_state(c->x[0], ld32(c->x[1]), 0); }
+HLE(_ZN2nn3hid12GetNpadStateEPNS0_17NpadJoyRightStateERKj) { npad_state(c->x[0], ld32(c->x[1]), 0); }
+HLE(_ZN2nn3hid12GetNpadStateEPNS0_11NpadGcStateERKj) { npad_state(c->x[0], ld32(c->x[1]), STYLE_GC); }
 
-HLE(_ZN2nn3hid15GetNpadStyleSetERKj) { c->x[0] = pad_connected(ld32(c->x[0])) ? STYLE_FULLKEY : 0; }
+HLE(_ZN2nn3hid15GetNpadStyleSetERKj) { c->x[0] = pad_style(ld32(c->x[0])); }
 HLE(_ZN2nn3hid19GetPlayerLedPatternERKj) {   /* the console's lights per player: 1, 12, 123, 1234, 14, 13, 134, 23 */
     static const u8 LEDS[8] = {0x1, 0x3, 0x7, 0xF, 0x9, 0x5, 0xD, 0x6};
     u32 id = ld32(c->x[0]);
@@ -209,18 +227,32 @@ HLE(_ZN2nn3hid19GetTouchScreenStateILm16EEEvPNS0_16TouchScreenStateIXT_EEE) {   
 
 /* ---- rumble ----------------------------------------------------------------------
  * A handle is npad id << 8 | device index; a Pro Controller's devices 0 and 1 are its left and
- * right actuators (VibrationDevicePosition 1 and 2). */
+ * right actuators (VibrationDevicePosition 1 and 2). A GameCube controller has one device, its
+ * motor (index VIB_GC_MOTOR), which the game drives with on/off commands. */
+enum { VIB_GC_MOTOR = 2 };
 static u8 vibration_sent[PAD_SLOTS][2][16];   /* the last VibrationValue per actuator */
 
 HLE(_ZN2nn3hid25GetVibrationDeviceHandlesEPNS0_21VibrationDeviceHandleEiRKjNS_4util10BitFlagSetILi32ENS0_12NpadStyleTagEEE) {
+    u32 id = ld32(c->x[2]), style = (u32)c->x[3];
+    if (style & STYLE_GC && !(style & STYLE_FULLKEY)) {
+        if ((i32)c->x[1] >= 1) st32(c->x[0], id << 8 | VIB_GC_MOTOR);
+        c->x[0] = (i32)c->x[1] >= 1;
+        return;
+    }
     i32 n = (i32)c->x[1] < 2 ? (i32)c->x[1] : 2;
-    for (i32 i = 0; i < n; i++) st32(c->x[0] + 4ull * i, ld32(c->x[2]) << 8 | (u32)i);
+    for (i32 i = 0; i < n; i++) st32(c->x[0] + 4ull * i, id << 8 | (u32)i);
     c->x[0] = (u32)n;
 }
 HLE(_ZN2nn3hid25InitializeVibrationDeviceERKNS0_21VibrationDeviceHandleE) { (void)c; }
 HLE(_ZN2nn3hid22GetVibrationDeviceInfoEPNS0_19VibrationDeviceInfoERKNS0_21VibrationDeviceHandleE) {
+    u32 handle = ld32(c->x[1]);
+    if ((handle & 0xFF) == VIB_GC_MOTOR) {
+        st32(c->x[0], 2);                         /* a GameCube controller's motor */
+        st32(c->x[0] + 4, 0);                     /* (no side) */
+        return;
+    }
     st32(c->x[0], 1);                             /* linear resonant actuator */
-    st32(c->x[0] + 4, (ld32(c->x[1]) & 1) + 1);   /* left / right */
+    st32(c->x[0] + 4, (handle & 1) + 1);          /* left / right */
 }
 /* VibrationValue { f32 amplitude low, frequency low, amplitude high, frequency high } */
 HLE(_ZN2nn3hid18SendVibrationValueERKNS0_21VibrationDeviceHandleERKNS0_14VibrationValueE) {

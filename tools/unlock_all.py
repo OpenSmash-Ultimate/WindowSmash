@@ -2,14 +2,12 @@
 """Unlock every fighter in a save, without earning them.
 
 Usage:
-  unlock_all.py [--tree <dir>] [--save <system_data.bin>] [--dry-run]
+  unlock_all.py [--save <system_data.bin>] [--dry-run]
 
-The tree is the game version's folder (the port's own by default, or e.g. v13.0.5: see
-docs/VERSIONS.md); the save is by default the one that version's game uses,
-<tree>/save/<user>/save_data/system_data.bin. Where the tables are depends on the game version,
-so the tool reads which version the tree is (its main module's build id) and refuses one whose
-layout it does not know (LAYOUTS) rather than write at the wrong place. The save keeps two
-tables indexed by each fighter's save_no from ui_chara_db.prc (0 Mario ... 73 Mii Gunner,
+The save is by default the one the game uses, save/<user>/save_data/system_data.bin. Where the
+tables are depends on the game version: the tool checks that the game is 13.0.5 (its main
+module's build id, LAYOUTS) and otherwise changes nothing rather than write at the wrong place.
+The save keeps two tables indexed by each fighter's save_no from ui_chara_db.prc (0 Mario ... 73 Mii Gunner,
 74-83 the DLC fighters, then 84 Kazuya (12.0.0) and 85 Sora (13.0.0): the game unlocks those
 itself when their add-on content is installed, so this tool leaves them alone):
   FLAGS    8 bytes per fighter: [0] 1 = selectable, [1..3] challenger state (a challenger the
@@ -38,10 +36,9 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SAVE = os.path.join("save", "0123456789abcdeffedcba9876543210", "save_data", "system_data.bin")
-# the save layouts known, by the build id of the game's main module:
-# (game version, save size, FLAGS, RECORDS)
+# the save layout, by the build id of the game's main module (tools/game_version.py's; this file
+# is copied into packages on its own): (game version, save size, FLAGS, RECORDS)
 LAYOUTS = {
-    "4A3F8ED7DCCE3AD4541A3A2F7622B5B57FC8A55C": ("11.0.0", 0x5B4AF8, 0x53FF40, 0x54FEA8),
     "21450C647B8C5940ED5B68218EA128FD3C5D597D": ("13.0.5", 0x5B4AF8, 0x53FF40, 0x54FEA8),
 }
 STARTERS = {0, 1, 2, 3, 5, 6, 7, 8}   # Mario, Donkey Kong, Link, Samus, Yoshi, Kirby, Fox, Pikachu
@@ -62,29 +59,29 @@ def record(t):
             | HOW << 48 | 1 << 63)
 
 
-def main_build_id(tree):
-    """The build id of a tree's main module (an NSO: the id is in its header)."""
-    with open(os.path.join(tree, "dump", "exefs", "main"), "rb") as f:
+def main_build_id(root):
+    """The build id of the game's main module (an NSO: the id is in its header)."""
+    with open(os.path.join(root, "dump", "exefs", "main"), "rb") as f:
         head = f.read(0x60)
     if head[:4] != b"NSO0":
-        raise SystemExit(f"{tree}: dump/exefs/main is not a game module")
+        raise SystemExit(f"{root}: dump/exefs/main is not a game module")
     return head[0x40:0x60].hex().rstrip("0").upper()
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--tree", default=ROOT, help="the game version's folder (default: the port's own)")
-    ap.add_argument("--save", help="the save to change (default: <tree>/" + SAVE.replace(os.sep, "/") + ")")
+    ap.add_argument("--root", default=ROOT, help=argparse.SUPPRESS)   # (the WindowSmash folder: tests)
+    ap.add_argument("--save", help="the save to change (default: " + SAVE.replace(os.sep, "/") + ")")
     ap.add_argument("--dry-run", action="store_true", help="list what would be unlocked, change nothing")
     a = ap.parse_args()
-    build_id = main_build_id(a.tree)
+    build_id = main_build_id(a.root)
     if build_id not in LAYOUTS:
-        vt = os.path.join(a.tree, "version.txt")
+        vt = os.path.join(a.root, "version.txt")
         version = open(vt).readline().strip() if os.path.exists(vt) else "unknown"
-        raise SystemExit(f"{os.path.abspath(a.tree)} is game version {version} (main {build_id[:16]}): this tool knows the save "
+        raise SystemExit(f"{os.path.abspath(a.root)} has game version {version} (main {build_id[:16]}): this tool knows the save "
                          f"layout of {', '.join(v[0] for v in LAYOUTS.values())} only, so it changes nothing here")
     version, SAVE_SIZE, FLAGS, RECORDS = LAYOUTS[build_id]
-    a.save = a.save or os.path.join(a.tree, SAVE)
+    a.save = a.save or os.path.join(a.root, SAVE)
     print(f"game version {version}: {a.save}")
     if not os.path.isfile(a.save):   # (the game makes it: the first time it reaches the main menu)
         launcher = "launchers/Unlock All Fighters.command" if sys.platform == "darwin" else "Unlock All Fighters"

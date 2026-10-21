@@ -15,8 +15,8 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tools"))
 import ssbu_relay as R   # noqa: E402
 
-BUILD = "4A3F8ED7DCCE3AD4541A3A2F7622B5B57FC8A55C"
-OTHER_BUILD = "21450C647B8C5940ED5B68218EA128FD3C5D597D"
+BUILD = "21450C647B8C5940ED5B68218EA128FD3C5D597D"         # (13.0.5's: the one the lobby lets in)
+OTHER_BUILD = "4A3F8ED7DCCE3AD4541A3A2F7622B5B57FC8A55C"   # (11.0.0's)
 BCAST = R.BROADCASTS[0]
 GAME_PORT = 12345
 
@@ -241,13 +241,29 @@ class Joining(LobbyTest):
         self.assertEqual(r[2], 1)
         self.assertIn(b"different netplay version", r)
 
+    def test_another_game_version_refused(self):
+        p = self.player(join=False, build=OTHER_BUILD)
+        p.send(p.join_packet())
+        r = p.first(R.REJECT)
+        self.assertIsNotNone(r)
+        self.assertEqual((r[2], r[12]), (R.PROTOCOL, 4))
+        self.assertEqual(R.text(r[13:77]), "WindowSmash needs game 13.0.5: run the installer again")
+        self.assertIsNone(p.first(R.WELCOME, 0.3))
+        self.assertEqual(self.server.lobby.drops["game version"], 1)
+        self.assertEqual(len(self.server.lobby.by_addr), 0)
+        for build in ("", "B007A1A"):   # (none at all, or a made-up game's)
+            q = self.player(join=False, build=build)
+            q.send(q.join_packet())
+            self.assertIsNotNone(q.first(R.REJECT))
+        self.assertIsNotNone(self.player(build=BUILD.lower()).ip)   # (13.0.5's, whichever case)
+
     def test_short_old_join_ignored(self):
         p = self.player(join=False)
         p.send(p.join_packet(version=1, size=20))
         self.assertEqual(p.recv(0.3), [])
 
     def test_unique_addresses_across_lobbies(self):
-        a, b, c = self.player(), self.player(room="friends"), self.player(build=OTHER_BUILD)
+        a, b, c = self.player(), self.player(room="friends"), self.player(room="lobbytest")
         self.assertEqual(len({a.ip, b.ip, c.ip}), 3)
         for p in (a, b, c):
             self.assertEqual(p.ip >> 16, 0x0A0D)
@@ -356,16 +372,15 @@ class Listing(LobbyTest):
             newer.ping(newer_ms)
             self.assertEqual([o for o, _ in looker.list()], [older.ip, newer.ip, far.ip])
 
-    def test_rooms_listed_to_same_build_and_code(self):
+    def test_rooms_listed_to_same_code(self):
         host, session, _ = self.room()
-        same, other_code, other_build = self.player(), self.player(room="friends"), self.player(build=OTHER_BUILD)
+        same, other_code = self.player(), self.player(room="friends")
         rooms = same.list()
         self.assertEqual(len(rooms), 1)
         owner, info = rooms[0]
         self.assertEqual(owner, host.ip)
         self.assertEqual(info[R.NI_SESSION:R.NI_SESSION + 16], session)
         self.assertEqual(other_code.list(), [])
-        self.assertEqual(other_build.list(), [])
         self.assertEqual(host.list(), [])   # (not its own)
 
     def test_order_and_cap(self):

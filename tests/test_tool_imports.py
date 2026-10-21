@@ -12,7 +12,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parent.parent
 TOOLS = ROOT / 'tools'
-CALLERS = [TOOLS / 'build_game.py', TOOLS / 'install_windowsmash.ps1', TOOLS / 'install_version.py',
+CALLERS = [TOOLS / 'build_game.py', TOOLS / 'install_windowsmash.ps1',
            TOOLS / 'mac' / 'install_mac.py', *ROOT.glob('*.bat'), *(ROOT / 'launchers').glob('*.bat'), *TOOLS.glob('*.bat'),
            *ROOT.glob('*.command'), *(ROOT / 'launchers').glob('*.command'), *ROOT.glob('*.sh'),
            *(ROOT / 'launchers').glob('*.sh'), *(TOOLS / 'mac').glob('*.sh')]

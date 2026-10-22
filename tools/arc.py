@@ -173,7 +173,11 @@ class Arc:
 
         (_size, paths, info_indices, folders, offsets_1, child_hashes, infos, info_to_datas, datas,
          offsets_2, datas_2) = struct.unpack_from("<11I", t, 0)
-        self.regions, _, _, self.version, extra_folders, extra, _, _, extra_2, _ = struct.unpack_from("<BBHIIIIIII", t, 56)
+        # the extra folders, infos, info-to-datas and datas: entries a patch added after each table's
+        # own ones, which the table's last section (after datas, see mods.py) indexes; the counts
+        # the game itself reads (f_710374f910)
+        (self.regions, _, _, self.version, extra_folders, _, _, extra_infos, extra_2,
+         extra_datas) = struct.unpack_from("<BBHIIIIIII", t, 56)
         o = 0x58 + self.regions * 12                 # header, then one 12-byte entry per region
         quick_dirs, stream_hashes, stream_indices, stream_datas = struct.unpack_from("<4I", t, o)
         o += 16 + quick_dirs * 12
@@ -188,11 +192,12 @@ class Arc:
         for name, count, size in (("hash_to_path", groups, 8), ("paths", paths, 32), ("info_indices", info_indices, 8),
                                   ("dir_hash_to_info", folders, 8), ("dirs", folders, 0x34),
                                   ("folder_offsets", offsets_1 + offsets_2 + extra_folders, 0x1C),
-                                  ("child_hashes", child_hashes, 8), ("infos", infos + datas_2 + extra, 16),
+                                  ("child_hashes", child_hashes, 8), ("infos", infos + datas_2 + extra_infos, 16),
                                   ("info_to_datas", info_to_datas + datas_2 + extra_2, 12),
-                                  ("datas", datas + datas_2 + extra, 16)):
+                                  ("datas", datas + datas_2 + extra_datas, 16)):
             self.tab[name] = (o, size, count)
             o += count * size
+        self.extra_at = o   # the extra section (patch-added files by hash), to the table's end
 
     def _entry(self, table, index, fmt):
         offset, size, _count = self.tab[table]
@@ -219,8 +224,9 @@ class Arc:
                 to_data, flags = self._entry("infos", info, "<4I")[2:]
             except struct.error:
                 continue
+            # (a regional file: an empty entry, then one per region - the game reads to_data + 1 + its region)
             for r in range(self.regions) if flags & 0x8000 else (0,):
-                where = self._data(to_data + r)
+                where = self._data(to_data + 1 + r if flags & 0x8000 else to_data)
                 if where:
                     out[(full & LOW40, r)] = where
         return out
@@ -266,8 +272,8 @@ class Arc:
             return None
         full = self._entry("paths", v >> 40, "<Q")[0]
         info = self._entry("info_indices", full >> 40, "<2I")[1]
-        _, _, to_data, _flags = self._entry("infos", info, "<4I")   # regional files are not handled
-        where = self._data(to_data)
+        _, _, to_data, flags = self._entry("infos", info, "<4I")
+        where = self._data(to_data + 1 if flags & 0x8000 else to_data)   # (a regional file: its first region's)
         if where is None:
             return None
         offset, stored, size, flags = where

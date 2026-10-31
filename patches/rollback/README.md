@@ -47,8 +47,8 @@ delay, bots). `launchers\Play SSBU Offline (rollback).bat` runs the rollback exe
 1. Copies `runtime\` to `build\rb_root\runtime\` (a scratch tree, rebuilt every time).
 2. Overlays `patches\rollback\src\*`: new files, plus full copies of the runtime files this build changes.
    Each changed file's original is kept in `patches\rollback\base\`; if `runtime\` no longer matches it,
-   the build stops instead of mixing versions. (If a `patches\nvfix` overlay is present it's applied first;
-   it isn't part of this branch, so the build prints a warning and goes on without it.)
+   the build stops instead of mixing versions. (The NVIDIA shader-eviction fix, "nvfix", is already in this
+   build's own `gpu_d3d11.c` and `hle_nv.c`; a separate `patches\nvfix` overlay isn't needed.)
 3. Links with WindowSmash's own `tools\recomp.py link`, pointed at the assembled tree. Runtime objects go
    to `build\rt_rollback`. The rollback wraps guest functions (`HLE_WRAP`), which changes `main`'s
    generated C, so this build keeps its own `build\main_rb`, seeded once from `build\main`; only the files

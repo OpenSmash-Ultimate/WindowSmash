@@ -31,7 +31,7 @@ def assemble():
             shutil.copy2(os.path.join(NVFIX, n), os.path.join(SRC_DIR, n[:-8]))
         print(f"[rb build] nvfix patches applied: {', '.join(n[:-8] for n in patched)}")
     else:
-        print("[rb build] WARNING: nvfix patches missing or made for another runtime; building without them")
+        print("[rb build] (no separate nvfix patches here: the shader fix is already in this build's own gpu_d3d11.c and hle_nv.c)")
     # 2. this build's own files; a changed runtime file must still match the original it was made from
     base, src = os.path.join(HERE, "base"), os.path.join(HERE, "src")
     for n in sorted(os.listdir(src)):

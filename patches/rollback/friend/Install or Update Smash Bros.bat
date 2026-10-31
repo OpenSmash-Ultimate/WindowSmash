@@ -10,7 +10,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "iex ((Get-Content -Liter
 if errorlevel 1 pause
 exit /b
 ##POWERSHELL##
-$OWNER = "Piaka11"; $REPO = "WindowSmash"; $BRANCH = "friends"
+$OWNER = "Piaka11"; $REPO = "WindowSmash"
 $ErrorActionPreference = "Stop"
 $NAME = "SMASH BROS"
 $memDir = Join-Path $env:LOCALAPPDATA "SMASH BROS Multiplayer"
@@ -76,7 +76,11 @@ Set-Content -LiteralPath $memFile -Encoding utf8 -Value $ws
 
 # ---- the multiplayer launcher from GitHub; it downloads and builds the rest --------------------------------------
 $launcher = Join-Path $ws "launchers\smash_multiplayer.ps1"
-try { Invoke-WebRequest "https://raw.githubusercontent.com/$OWNER/$REPO/$BRANCH/launchers/smash_multiplayer.ps1" -OutFile $launcher -UseBasicParsing -TimeoutSec 60 }
+try {
+    # (from the latest release: the version that has been tested)
+    $tag = (Invoke-RestMethod "https://api.github.com/repos/$OWNER/$REPO/releases/latest" -TimeoutSec 15 -Headers @{ "User-Agent" = "SmashBrosMultiplayer" }).tag_name
+    Invoke-WebRequest "https://raw.githubusercontent.com/$OWNER/$REPO/$tag/launchers/smash_multiplayer.ps1" -OutFile $launcher -UseBasicParsing -TimeoutSec 60
+}
 catch { Fail "GitHub couldn't be reached ($($_.Exception.Message)).`n`nCheck the internet connection and try again." }
 & powershell -NoProfile -ExecutionPolicy Bypass -File $launcher -Install
 if ($LASTEXITCODE -ne 0) { exit 1 }

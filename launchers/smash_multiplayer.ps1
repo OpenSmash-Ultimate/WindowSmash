@@ -1,12 +1,12 @@
 # What the MULTIPLAYER shortcut runs (SMASH BROS\MULTIPLAYER.lnk, made by "Install or Update Smash Bros.bat"):
-# asks GitHub whether the multiplayer branch has a newer version than the one built here; if so, downloads its
+# asks GitHub whether the fork's latest release is a newer version than the one built here; if so, downloads its
 # rollback files (source only: no game code is ever downloaded) and builds build\ssbu_rollback.exe from this PC's
 # own game files; then opens the Host / Join window (rollback_netplay.ps1). Offline, or GitHub not answering:
 # straight to the window with the version already built.
 #   -Install   (the installer) always update and build, then make the MULTIPLAYER shortcut
 param([switch]$Install)
 
-$OWNER = "Piaka11"; $REPO = "WindowSmash"; $BRANCH = "friends"
+$OWNER = "Piaka11"; $REPO = "WindowSmash"
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
@@ -46,7 +46,11 @@ function Close-Wait { if ($script:win) { $script:win.Form.Close(); $script:win =
 $api = "https://api.github.com/repos/$OWNER/$REPO"
 $have = if (Test-Path $stamp) { (Get-Content $stamp -TotalCount 1).Trim() } else { "" }
 $latest = $null
-try { $latest = (Invoke-RestMethod "$api/commits/$BRANCH" -TimeoutSec 8 -Headers @{ "User-Agent" = "SmashBrosMultiplayer" }).sha }
+# (the latest release: what has been tested; pushes to the branch alone change nobody's game)
+try {
+    $tag = (Invoke-RestMethod "$api/releases/latest" -TimeoutSec 8 -Headers @{ "User-Agent" = "SmashBrosMultiplayer" }).tag_name
+    $latest = (Invoke-RestMethod "$api/commits/$tag" -TimeoutSec 8 -Headers @{ "User-Agent" = "SmashBrosMultiplayer" }).sha
+}
 catch { if ($Install) { Say "GitHub couldn't be reached, so multiplayer couldn't be downloaded.`n`nCheck the internet connection and try again." "Warning"; exit 1 } }
 
 if ($latest -and ($latest -ne $have -or -not (Test-Path $exe))) {

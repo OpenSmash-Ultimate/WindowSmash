@@ -70,6 +70,8 @@ if ($latest -and ($latest -ne $have -or -not (Test-Path $exe))) {
             New-Item -ItemType Directory -Force (Split-Path -Parent $to) | Out-Null
             $url = "https://raw.githubusercontent.com/$OWNER/$REPO/$latest/" + (($f.path -split "/" | ForEach-Object { [Uri]::EscapeDataString($_) }) -join "/")
             Invoke-WebRequest $url -OutFile $to -UseBasicParsing -TimeoutSec 60
+            # (GitHub serves the stored LF; .bat files need CRLF, as a checkout gives them)
+            if ($to -match "\.(bat|ps1)$") { [IO.File]::WriteAllText($to, ([IO.File]::ReadAllText($to) -replace "`r?`n", "`r`n")) }
             [System.Windows.Forms.Application]::DoEvents()
         }
         # (everything downloaded: only now put it in place)

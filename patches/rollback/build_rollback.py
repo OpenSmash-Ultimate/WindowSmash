@@ -82,12 +82,14 @@ def build_main(recomp):
 
 
 def main():
-    with open(os.path.join(NVFIX, "dirs.txt"), encoding="utf-8") as f:
-        dirs = [os.path.join(ROOT, d) for d in f.read().strip().split(",")]
     if not os.path.isdir(MAIN):
         sys.exit("Build WindowSmash first (Build WindowSmash.bat): the test build reuses its game modules.")
     assemble()
     recomp = point_tools_at_rb_root()
+    # (the modules the normal build links, as recomp.build_all lists them)
+    paths = recomp.module_paths(os.path.join(ROOT, "dump", "exefs"))
+    dirs = [os.path.join(ROOT, "build", "nro", n) if os.path.dirname(p) == recomp.NRO_DIR else os.path.join(ROOT, "build", n)
+            for n, p in paths.items()]
     build_main(recomp)
     dirs = [MAIN_RB if os.path.normpath(d) == MAIN else d for d in dirs]
     ok = recomp.link(dirs, os.path.join(ROOT, "build", "ssbu_rollback.exe"), os.path.join(ROOT, "build", "rt_rollback"))

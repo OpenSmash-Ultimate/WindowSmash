@@ -2371,7 +2371,10 @@ HLE_WRAP(71038701e0) {
      * and a slower PC caught up there with extra ones: two PCs began the fight a frame apart, animations and
      * an idle variant's random draw out of step (twopc3: Kazuya's wait motion at frame 63 on one PC, 64 on the
      * other, Steve on another motion and one draw more). In the menus a lagging PC then runs slower instead.) */
-    if (!rb_on || !p3 || !(S.in_fight || (net_mode == 2 && net_early_on()))) return;
+    /* (v0.9.4b: and from the match set-up to GO!, always. v0.9.4's waits there for the others (net_pre_step) left
+     * refreshes undone, which the game then ran as extra logic frames: one more just before GO! on the game that had
+     * waited, so its fight began at logic frame 2 and the other's at 1, and they went apart 4.5 s in, a match over the internet, 11-01) */
+    if (!rb_on || !p3 || !(S.in_fight || (net_mode == 2 && (net_early_on() || net_countdown)))) return;
     if (keep_drops < 0) { const char *e = getenv("SSBU_RB_DROPS"); keep_drops = e && *e == '1'; }
     u64 n = ld64(p3);
     if (!n || keep_drops) return;

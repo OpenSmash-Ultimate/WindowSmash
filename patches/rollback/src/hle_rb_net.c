@@ -175,9 +175,11 @@ size_t rbn_hello_build(uint8_t *b, size_t cap, const RbnHello *h) {
     return RBN_HELLO_BYTES;
 }
 int rbn_delay_for_rtt(double rtt_ms) {
-    /* one more frame each 30 ms: at 46 ms and delay 1 the internet test rolled back every 4 frames (the other
-     * player snapping about); under 30 ms (a home network) stays 1 */
-    int d = 1 + (int)(rtt_ms > 0 ? rtt_ms / 30 : 0);
+    /* one more frame each 30 ms, rounded: at 46 ms and delay 1 the internet test rolled back every 4 frames (the
+     * other player snapping about); at 48 ms and delay 2 still every 6 on the host, the joiner's pads late over its
+     * Wi-Fi (the round trip, the least of 30, can't show one way being slower): 45-75 ms now gets 3. Under 15 ms (a
+     * home network) stays 1 */
+    int d = 1 + (int)(rtt_ms > 0 ? (rtt_ms + 15) / 30 : 0);
     return d > 5 ? 5 : d;
 }
 int rbn_hello_parse(const uint8_t *b, size_t len, RbnHello *h) {

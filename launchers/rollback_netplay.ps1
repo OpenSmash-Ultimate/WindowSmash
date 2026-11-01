@@ -175,13 +175,19 @@ $statusTimer.Add_Tick({
     $hostStatus.Text = $t; $joinStatus.Text = $t
     # (the game gone for 3 s, or never started: this window really closes)
     $g = @(Get-Process ssbu_rollback -ErrorAction SilentlyContinue)
-    elseif ((++$script:gone -ge 6 -and $script:seen) -or $script:gone -ge 120) { $script:quit = $true; $statusTimer.Stop(); $form.Close(); return }
+    if ($g.Count -gt 0) {
+        $script:seen = $true; $script:gone = 0
+        if (@($g | Where-Object { $_.MainWindowHandle -ne 0 }).Count -gt 0) { $script:winUp = $true }
+    } else {
+        $script:gone++
+        if (($script:seen -and $script:gone -ge 6) -or $script:gone -ge 120) { $script:quit = $true; $statusTimer.Stop(); $form.Close(); return }
+    }
     # (comes to the front when the game starts waiting, hidden or not; hides again when the wait ends: the match goes on)
     if ($t -and -not $script:said) { $form.Show(); $form.WindowState = "Normal"; Bring-Front }
-    elseif (-not $t -and $script:said) { $form.Hide() }
+    if (-not $t -and $script:said) { $form.Hide() }
     $script:said = $t
     # (on top only while the game's window opens over this one: then it may lose focus like any window)
-    if ($form.TopMost -and $script:winUp -and ++$script:ontop -ge 6) { $form.TopMost = $false; Bring-Front }
+    if ($form.TopMost -and $script:winUp) { $script:ontop++; if ($script:ontop -ge 6) { $form.TopMost = $false; Bring-Front } }
 })
 # once a game is started, Close (and the X) hide the window instead: it must be there when the game waits
 $script:started = $false; $script:quit = $false; $script:seen = $false; $script:gone = 0; $script:said = ""; $script:ontop = 0; $script:winUp = $false

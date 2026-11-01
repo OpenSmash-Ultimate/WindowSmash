@@ -58,6 +58,37 @@ function Read-Addresses {
     return @{ Text = $text.Trim(); Lan = $lan; Outside = $out }
 }
 
+# "Collect logs": the newest logs and the last day's freeze or crash reports, zipped onto the Desktop to send in Discord
+# (copied first: a game still running keeps its log open)
+function Collect-Logs {
+    $stamp = Get-Date -Format "yyyy-MM-dd HHmm"
+    $tmp = Join-Path ([IO.Path]::GetTempPath()) "smash_logs_$PID"
+    if (Test-Path $tmp) { Remove-Item -Recurse -Force $tmp }
+    New-Item -ItemType Directory $tmp | Out-Null
+    $since = (Get-Date).AddDays(-1)
+    $pick = @()
+    foreach ($pat in "play_rollback_net_*.log", "play_rollback.log", "rollback_update.log") {
+        $pick += @(Get-ChildItem (Join-Path $root "build") -Filter $pat -File -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -gt $since })
+    }
+    $pick += @(Get-ChildItem (Join-Path $root "reports") -File -ErrorAction SilentlyContinue |
+               Where-Object { $_.Name -match '^(freeze|crash|stopped)_' -and $_.LastWriteTime -gt $since } | Sort-Object LastWriteTime -Descending | Select-Object -First 6)
+    if ($pick.Count -eq 0) { throw "No logs from the last day were found here (build\play_rollback_net_*.log)." }
+    foreach ($f in $pick) {
+        $in = [IO.File]::Open($f.FullName, 'Open', 'Read', 'ReadWrite')
+        try { $out = [IO.File]::Create((Join-Path $tmp $f.Name)); try { $in.CopyTo($out) } finally { $out.Close() } } finally { $in.Close() }
+    }
+    $ver = "version: "
+    foreach ($v in "patches\rollback\INSTALLED_COMMIT.txt", "version.txt") { $p = Join-Path $root $v; if (Test-Path $p) { $ver += "$v " + (Get-Content $p -Raw).Trim() + "; " } }
+    Set-Content -Encoding ascii (Join-Path $tmp "about.txt") "$ver`r`ncollected $stamp`r`n$(($pick | ForEach-Object { "$($_.Name)  $($_.LastWriteTime)" }) -join "`r`n")"
+    $zip = Join-Path ([Environment]::GetFolderPath("Desktop")) "Smash multiplayer logs $stamp.zip"
+    if (Test-Path $zip) { Remove-Item $zip }
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    [IO.Compression.ZipFile]::CreateFromDirectory($tmp, $zip)
+    Remove-Item -Recurse -Force $tmp
+    return $zip
+}
+
+if ($Test -eq "collect") { Collect-Logs; exit 0 }   # (checks: the zip, no window)
 if ($Test) {   # (checks without a window)
     Start-Rollback $Test $Arg -dry
     exit 0
@@ -92,6 +123,10 @@ $hostBtn = New-Button "Host a match" 20 70 200 90; $hostBtn.Font = $big
 $joinBtn = New-Button "Join a match" 240 70 200 90; $joinBtn.Font = $big
 $choose.Controls.AddRange(@($hostBtn, $joinBtn))
 $choose.Controls.Add((New-Label "Host: your PC runs the match and the others connect to it. Join: connect to a friend who hosts." 20 180 420 60))
+$collectBtn = New-Button "Collect logs" 20 270 140 40
+$collectNote = New-Label "Something went wrong in a match? Collect logs, then send the zip." 170 268 280 50
+$collectNote.Font = New-Object Drawing.Font("Segoe UI", 9)
+$choose.Controls.AddRange(@($collectBtn, $collectNote))
 
 # page 2: host
 $hostPage = New-Object Windows.Forms.Panel; $hostPage.Dock = "Fill"
@@ -141,6 +176,13 @@ $pages = @($choose, $hostPage, $addrPage, $joinPage, $joinedPage)
 $form.Controls.AddRange($pages)
 Show-Page $choose
 
+$collectBtn.Add_Click({
+    try {
+        $zip = Collect-Logs
+        $collectNote.Text = "Saved on your Desktop: send that zip in Discord."
+        Start-Process explorer.exe "/select,`"$zip`""
+    } catch { Fail $_.Exception.Message }
+})
 $hostBtn.Add_Click({ Show-Page $hostPage })
 $joinBtn.Add_Click({ Show-Page $joinPage; $addr.Focus() })
 $hostBack.Add_Click({ Show-Page $choose })

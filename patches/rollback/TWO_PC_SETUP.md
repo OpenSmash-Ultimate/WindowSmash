@@ -54,6 +54,8 @@ Plug in only your own controller (any kind; every controller plays as a Pro Cont
 - After the match, the logs are `build\play_rollback_net_host.log` (the host) and `build\play_rollback_net_join.log`
   (a joining PC; `join2`, `join3` if more games share one PC). Lines to look for: `a game joined: it is player N`,
   `took player 1's match seed`, `net mode (player N): ... 0 DIFFERENT (in sync)`, or `DESYNC with player N`.
+- To send them: the window's **Collect logs** button zips the last day's logs and freeze or crash reports onto the
+  Desktop (`Smash multiplayer logs <date>.zip`) and opens the folder, ready to drop into a chat.
 
 ## Known limits
 

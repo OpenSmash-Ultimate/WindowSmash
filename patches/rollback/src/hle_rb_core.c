@@ -1971,7 +1971,7 @@ static void net_gone_show(int p) {   /* (once this game's fight runs on past the
     static char text[512];
     snprintf(text, sizeof text,
              "Lost player %d: %s.\n\nThis fight goes on without them (their character stands still). Finish it, or pause and quit.\n\n"
-             "If both games were still connected, the two games had gone out of sync. Please send both players' logs.",
+             "If both games were still connected, the two games had gone out of sync: after the match, both players open MULTIPLAYER, click Collect logs and send the zip.",
              p + 1, net_gone_why[p]);
     HANDLE h = CreateThread(NULL, 0, net_gone_box, text, 0, NULL);
     if (h) CloseHandle(h);

@@ -146,6 +146,9 @@ Every game must start the fight from the same state:
   free slot of their own tag list (0xF7D8-byte slots; the game keeps two copies in memory, found by searching) for
   the match, point that player's panel at it (panel + 0x214 = slot + 1), and put the slot back once the results
   are over. They go back when the fight ends: the game saves its tag list as the results come.
+- **No-name controls (version 13)**: a player without a tag plays with their PC's customisable "no name" control set, a slot
+  just before the tag list (one 0xF7D8 stride; its first word is not a flag). Each PC sends it as a tag named `P<n>`, which
+  the others place like any tag, so the same push means the same move everywhere.
 - **Only a match's set-up arms net mode**: the controls screen builds player records too (and runs a test fight
   whose flag stays set afterwards), so the handshake, rules, tags and the fight itself start only for a record built
   from the match set-up (0x710178f3b8); other screens play locally. A tag slot is told by its control layout

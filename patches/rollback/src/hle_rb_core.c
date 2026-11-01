@@ -1598,6 +1598,7 @@ static void net_choice_send(int ask) {
 #define TAG_STRIDE 0xF7D8ull
 #define TAG_EMPTY_HASH 0x811c9dc5u
 #define TAG_MAX_SLOTS 128
+#define TAG_SLOTS 60
 u32 kernel_rb_regions(u64 (*out)[2], u32 max);
 static u64 tag_list[2]; static int tag_lists, tag_slots;   /* (the copies' first slots; slots in each) */
 static struct { u64 at; u8 *was; } tag_kept[2 * RBN_PLAYERS]; static int tag_nkept;
@@ -1647,6 +1648,9 @@ static void tag_find(void) {
                 while (s >= TAG_STRIDE && tag_slot_ok(s - TAG_STRIDE)) s -= TAG_STRIDE;
                 int n = 0;
                 while (n < TAG_MAX_SLOTS && tag_slot_ok(s + TAG_STRIDE * (u64)n)) n++;
+                /* (always 60 slots, and the list's end is sure: the no-name slot just before it can pass for an empty one - its
+                 * first word is whatever the save holds - which would put every tag's number one off) */
+                if (n > TAG_SLOTS) { s += TAG_STRIDE * (u64)(n - TAG_SLOTS); n = TAG_SLOTS; }
                 if (n < 40 || (tag_lists && s == tag_list[0])) { q = (const u8 *)G2H(s + TAG_STRIDE * (u64)n) - 1; if (q < lo + 4 || q >= he) break; continue; }
                 tag_list[tag_lists++] = s;
                 if (!tag_slots || n < tag_slots) tag_slots = n;
@@ -1670,15 +1674,60 @@ static void tag_name(const u8 *head, char *out, int cap) {   /* (for the log: th
     out[k] = 0;
 }
 /* This game's player's tag (its panel's + 0x214) into its choice. */
+/* (v0.9.7) A player without a tag plays with its PC's "no name" controls, which a player can change too: the others
+ * played it with theirs - the same C-stick push a tilt on its own PC and a smash on another (a match over the internet, 11-01). The no-name set
+ * is a slot like a tag's, just before the list (the save: 0x42f0, the list 0x13ac8, one TAG_STRIDE apart; its controls
+ * at + 0x24 as a tag's). It goes as a tag named after the player ("P2"), which the others put in a free slot for the
+ * match as any tag; this game keeps playing it without one. SSBU_RB_TEST_NONAME_DEFAULT=1 (tests, two games on one PC,
+ * one save): this game's no-name controls set to the defaults for the match, as on a PC whose player never changed them. */
+static int tag_noname(u8 *head) {
+    tag_find();
+    if (tag_lists <= 0) return 0;
+    u64 nn = tag_list[0] - TAG_STRIDE;
+    /* (told by the empty name and its controls: the slot's first word is no flag here - 0xaa000301 in one save - so not tag_slot_ok) */
+    int controls = 0;
+    if (readable(nn, RBN_TAG_BYTES)) for (u32 k = 0x24; k < 0x34; k++) controls |= ld8(nn + k);
+    if (!controls || ld32(nn + 4) != TAG_EMPTY_HASH || ld32(nn + 8) != 0) { fprintf(stderr, "[rb] name tags: the no-name controls aren't before the list here: not sent\n"); return 0; }
+    static int test = -1;
+    if (test < 0) { const char *e = getenv("SSBU_RB_TEST_NONAME_DEFAULT"); test = e && *e == '1'; }
+    if (test) {   /* (from an empty slot's controls, the defaults; the no-name slots kept to be put back after the match) */
+        for (int k = 0; k < tag_slots; k++) {
+            u64 e = tag_list[0] + TAG_STRIDE * (u64)k;
+            if (!tag_slot_ok(e) || ld32(e) != 0 || ld32(e + 4) != TAG_EMPTY_HASH) continue;
+            for (int l = 0; l < tag_lists && tag_nkept < 2 * RBN_PLAYERS; l++) {
+                u64 s = tag_list[l] - TAG_STRIDE;
+                u8 *was = malloc(TAG_STRIDE);
+                if (!was) break;
+                memcpy(was, G2H(s), TAG_STRIDE);
+                tag_kept[tag_nkept].at = s; tag_kept[tag_nkept].was = was; tag_nkept++;
+                memcpy(G2H(s + 0x24), G2H(e + 0x24), RBN_TAG_BYTES - 0x24);
+            }
+            fprintf(stderr, "[rb] name tags: (test) this game's no-name controls set to the defaults for the match\n");
+            break;
+        }
+    }
+    for (int k = 0; k < RBN_TAG_BYTES; k++) head[k] = ld8(nn + (u64)k);
+    fprintf(stderr, "[rb] name tags: the no-name controls here: +0x33 %02x, +0x3c %02x, +0x50 %02x%02x\n", head[0x33], head[0x3c], head[0x51], head[0x50]);
+    memset(head, 0, 0x24);
+    head[0] = 1;                                                       /* used */
+    u32 id = 0x52420000u | (u32)(net_local + 1); memcpy(head + 4, &id, 4);   /* (an id of its own, as a tag's) */
+    head[8] = 2;                                                       /* the name: "P<n>", what the game shows anyway */
+    head[12] = 'P'; head[14] = (u8)('1' + (net_local < 0 ? 0 : net_local));
+    return 1;
+}
 static void tag_mine(u64 st) {
     u32 n = ld32(st + 0x214);
     ch_mine.has_tag = 0; tag_mine_slot = 0;
-    if (!n || n == 0xffffffffu) return;
-    tag_find();
-    if (tag_lists <= 0 || n > (u32)tag_slots || !tag_slot_named(tag_list[0] + TAG_STRIDE * (n - 1))) {
-        /* (a deleted tag's slot, say: no tag on every PC, this one too - the default controls everywhere) */
-        fprintf(stderr, "[rb] name tags: this game's player has tag %u, but it isn't a named tag in the list here: played without one, here too\n", n);
-        st32(st + 0x214, 0);
+    if (!n || n == 0xffffffffu || (tag_find(), tag_lists <= 0 || n > (u32)tag_slots || !tag_slot_named(tag_list[0] + TAG_STRIDE * (n - 1)))) {
+        /* (a deleted tag's slot, say: no tag on this PC; v0.9.7: on the others, this PC's no-name controls) */
+        if (n && n != 0xffffffffu) {
+            fprintf(stderr, "[rb] name tags: this game's player has tag %u, but it isn't a named tag in the list here: played without one, here too\n", n);
+            st32(st + 0x214, 0);
+        }
+        if (tag_noname(ch_mine.tag)) {
+            ch_mine.has_tag = 1;   /* (tag_mine_slot stays 0: here, the player plays without a tag, on these very controls) */
+            fprintf(stderr, "[rb] name tags: this game's player has no tag: its no-name controls sent with its choice, as tag \"P%d\"\n", net_local + 1);
+        }
         return;
     }
     u64 s = tag_list[0] + TAG_STRIDE * (n - 1);
@@ -2604,6 +2653,17 @@ HLE_WRAP(71022756c0) { RAND_WRAP(71022756c0, "randf"); }
 #define SEL_BASE 0x710530a7c0ull
 #define SEL_CUR  0x710530a968ull
 #define SEL_HAZ  0x710530a985ull
+/* (v0.9.7 research: desyncs where the same C-stick push made a different attack for one player on the two PCs, every
+ * pad and the frame before alike. On its own PC a player's panel is a human's, set up as its controller joined; on the
+ * others it is a CPU's panel turned human here. The whole panel state, as the select screen left it and as it goes to
+ * the record builder, to set the two PCs' panels for one player side by side.) */
+static void panel_dump(const char *when, int idx, u64 st) {
+    for (u32 o = 0; o < 0x460; o += 0x40) {
+        char t[200]; size_t n = 0;
+        for (u32 k = 0; k < 0x40; k += 4) n += snprintf(t + n, sizeof t - n, " %08x", ld32(st + o + k));
+        fprintf(stderr, "[rb] panel %d %s +%03x:%s\n", idx + 1, when, o, t);
+    }
+}
 HLE_WRAP(71017880c0) {
     int idx = (int)c->x[1];
     u64 st = c->x[0];
@@ -2641,6 +2701,7 @@ HLE_WRAP(71017880c0) {
         u32 type = ld32(st + 0x78), slot = ld32(st + 0x210);
         fprintf(stderr, "[rb] handshake: panel %d as the select screen left it: type %u (0 human, 1 CPU, 3 none), controller slot %d, ui_chara %016llx, colour %d\n",
                 idx + 1, type, (int)slot, (unsigned long long)ld64(st + 0x88), ld8(st + 0x90));
+        panel_dump("left", idx, st);
         if (idx == 0) ch_have_mine = 0;   /* (a new set-up: this game's own choice read again) */
         if (net_local != 0 && rules_have) { st8(st + 5, rules_blob[RULES_TOTAL - 2]); st8(st + 0xa, rules_blob[RULES_TOTAL - 1]); }   /* (the host's rule kind and stocks) */
         /* This game's own player is the human panel its own controller joined (controller slot = this game's
@@ -2713,6 +2774,7 @@ HLE_WRAP(71017880c0) {
          * player on the default controls, the tag's own never applied: R jumped nowhere, gc1) */
         st32(st + 0x78, 0); st32(st + 0x210, (u32)idx); st8(st + 0x450, 1);
         st8(st + 0x454, 0); st8(st + 0x455, 0); st32(st + 0x214, tag_given[idx]);
+        panel_dump("built", idx, st);
     }
     f_71017880c0_orig(c);
 }

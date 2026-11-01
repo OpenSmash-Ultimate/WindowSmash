@@ -195,16 +195,19 @@ int rbn_hello_parse(const uint8_t *b, size_t len, RbnHello *h) {
 size_t rbn_choice_build(uint8_t *b, size_t cap, const RbnChoice *c) {
     if (cap < RBN_CHOICE_BYTES || c->player < 0 || c->player >= RBN_PLAYERS) return 0;
     memset(b, 0, RBN_CHOICE_BYTES);
-    b[0] = RBN_MSG_CHOICE; b[1] = (uint8_t)c->player; b[2] = (uint8_t)c->colour; b[3] = (uint8_t)((c->has_stage != 0) | (c->ask != 0) << 1); b[4] = (uint8_t)c->hazards;
+    b[0] = RBN_MSG_CHOICE; b[1] = (uint8_t)c->player; b[2] = (uint8_t)c->colour;
+    b[3] = (uint8_t)((c->has_stage != 0) | (c->ask != 0) << 1 | (c->has_tag != 0) << 2); b[4] = (uint8_t)c->hazards;
     put64(b + 8, c->chara);
     memcpy(b + 16, c->stage, 0x20);
+    if (c->has_tag) memcpy(b + 48, c->tag, RBN_TAG_BYTES);
     return RBN_CHOICE_BYTES;
 }
 int rbn_choice_parse(const uint8_t *b, size_t len, RbnChoice *c) {
     if (len != RBN_CHOICE_BYTES || b[0] != RBN_MSG_CHOICE || b[1] >= RBN_PLAYERS) return 0;
-    c->player = b[1]; c->colour = b[2]; c->has_stage = b[3] & 1; c->ask = b[3] >> 1 & 1; c->hazards = b[4];
+    c->player = b[1]; c->colour = b[2]; c->has_stage = b[3] & 1; c->ask = b[3] >> 1 & 1; c->has_tag = b[3] >> 2 & 1; c->hazards = b[4];
     c->chara = get64(b + 8);
     memcpy(c->stage, b + 16, 0x20);
+    memcpy(c->tag, b + 48, RBN_TAG_BYTES);
     return 1;
 }
 

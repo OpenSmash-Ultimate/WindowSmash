@@ -1460,6 +1460,127 @@ static void net_choice_send(int ask) {
     size_t k = rbn_choice_build(out, sizeof out, &ch_mine);
     if (k) rbl_send(out, (int)k);
 }
+/* ---- name tags (version 10) ------------------------------------------------------------------------------------
+ * The save's name tags are a list of 0xF7D8-byte slots (the save at 0x13ac8; the game keeps two copies in memory,
+ * found by searching: heap addresses). A slot's head (RBN_TAG_BYTES): used u32 (0/1), the name's hash u32 (an empty
+ * slot: 0x811c9dc5, FNV-1a's basis), its length u32 (up to 10), the name in UTF-16 (10), then the tag's controls and
+ * settings. A panel picks one as + 0x214 = slot + 1 (0: none; tag research, 10-31: the first slot's tag -> 1, the second's -> 2).
+ * A tag's controls turn the same pads into other moves, so every game must play a player with the same tag: each game
+ * sends its own player's tag head with its choice, and the others write it into a free slot of their list (both
+ * copies) for the match and point that player's panel at it. The slots are put back as they were once the match is
+ * over (character select again, or the next set-up): a friend's tag is never kept in this PC's list. */
+#define TAG_STRIDE 0xF7D8ull
+#define TAG_EMPTY_HASH 0x811c9dc5u
+#define TAG_MAX_SLOTS 128
+u32 kernel_rb_regions(u64 (*out)[2], u32 max);
+static u64 tag_list[2]; static int tag_lists, tag_slots;   /* (the copies' first slots; slots in each) */
+static struct { u64 at; u8 *was; } tag_kept[2 * RBN_PLAYERS]; static int tag_nkept;
+static u32 tag_mine_slot;                  /* (this game's player's tag: its slot + 1 here) */
+static u32 tag_given[RBN_PLAYERS];         /* (each player's panel + 0x214 this set-up, once worked out) */
+static int tag_slot_ok(u64 a) {
+    if (!readable(a, RBN_TAG_BYTES)) return 0;
+    u32 used = ld32(a), hash = ld32(a + 4), len = ld32(a + 8);
+    if (used == 0) return hash == TAG_EMPTY_HASH && len == 0;
+    if (used != 1 || len < 1 || len > 10) return 0;
+    for (u32 k = 0; k < len; k++) if (!ld8(a + 12 + 2 * k)) return 0;
+    return 1;
+}
+/* (both copies, from any empty slot's head: back to the first slot, then counted; some 200 ms) */
+static void tag_find(void) {
+    if (tag_lists) return;
+    static u64 reg[16384][2];
+    u32 nr = kernel_rb_regions(reg, 16384); if (nr > 16384) nr = 16384;
+    static const u8 head[12] = {0, 0, 0, 0, 0xc5, 0x9d, 0x1c, 0x81, 0, 0, 0, 0};
+    double t0 = now_ms();
+    for (u32 r = 0; r < nr && tag_lists < 2; r++)
+        for (u64 a = reg[r][0], end = reg[r][0] + reg[r][1]; a < end && tag_lists < 2;) {
+            MEMORY_BASIC_INFORMATION mi;
+            if (!VirtualQuery(G2H(a), &mi, sizeof mi)) break;
+            u64 run_end = H2G((u8 *)mi.BaseAddress + mi.RegionSize);
+            if (run_end > end) run_end = end;
+            int ok = mi.State == MEM_COMMIT && (mi.Protect & PAGE_READWRITE) && !(mi.Protect & PAGE_GUARD);
+            const u8 *lo = (const u8 *)G2H(a), *he = (const u8 *)G2H(run_end);
+            for (const u8 *q = lo + 4; ok && q + 8 <= he && tag_lists < 2; q++) {
+                q = memchr(q, 0xc5, (size_t)(he - q));
+                if (!q || q + 8 > he) break;
+                if (memcmp(q - 4, head, 12)) continue;
+                u64 s = H2G(q - 4);
+                if (((s - H2G(lo)) & 3) || !tag_slot_ok(s)) continue;
+                while (s >= TAG_STRIDE && tag_slot_ok(s - TAG_STRIDE)) s -= TAG_STRIDE;
+                int n = 0;
+                while (n < TAG_MAX_SLOTS && tag_slot_ok(s + TAG_STRIDE * (u64)n)) n++;
+                if (n < 8 || (tag_lists && s == tag_list[0])) { q = (const u8 *)G2H(s + TAG_STRIDE * (u64)n) - 1; if (q < lo + 4 || q >= he) break; continue; }
+                tag_list[tag_lists++] = s;
+                if (!tag_slots || n < tag_slots) tag_slots = n;
+                q = (const u8 *)G2H(s + TAG_STRIDE * (u64)n) - 1;
+                if (q < lo + 4 || q >= he) break;
+            }
+            a = run_end;
+        }
+    fprintf(stderr, "[rb] name tags: %d copies of the list found (%#llx, %#llx), %d slots, in %.0f ms\n", tag_lists,
+            (unsigned long long)tag_list[0], (unsigned long long)tag_list[1], tag_slots, now_ms() - t0);
+    if (!tag_lists) tag_lists = -1;   /* (not again this run) */
+}
+static void tag_name(const u8 *head, char *out, int cap) {   /* (for the log: the name in ASCII, ? for the rest) */
+    u32 len = head[8] | head[9] << 8; int k = 0;
+    for (u32 i = 0; i < len && i < 10 && k < cap - 1; i++) { u8 lo = head[12 + 2 * i], hi = head[13 + 2 * i]; out[k++] = !hi && lo >= 32 && lo < 127 ? (char)lo : '?'; }
+    out[k] = 0;
+}
+/* This game's player's tag (its panel's + 0x214) into its choice. */
+static void tag_mine(u64 st) {
+    u32 n = ld32(st + 0x214);
+    ch_mine.has_tag = 0; tag_mine_slot = 0;
+    if (!n || n == 0xffffffffu) return;
+    tag_find();
+    if (tag_lists <= 0 || n > (u32)tag_slots || !tag_slot_ok(tag_list[0] + TAG_STRIDE * (n - 1))) {
+        fprintf(stderr, "[rb] name tags: this game's player has tag %u, but it isn't in the list here: played without it\n", n);
+        st32(st + 0x214, 0);
+        return;
+    }
+    u64 s = tag_list[0] + TAG_STRIDE * (n - 1);
+    for (int k = 0; k < RBN_TAG_BYTES; k++) ch_mine.tag[k] = ld8(s + (u64)k);
+    ch_mine.has_tag = 1; tag_mine_slot = n;
+    char nm[16]; tag_name(ch_mine.tag, nm, sizeof nm);
+    fprintf(stderr, "[rb] name tags: this game's player plays with tag \"%s\" (slot %u): sent with its choice\n", nm, n - 1);
+}
+/* Every slot written for the match back as it was. */
+static void tag_restore(const char *why) {
+    if (!tag_nkept) return;
+    for (int i = 0; i < tag_nkept; i++) {
+        if (readable(tag_kept[i].at, TAG_STRIDE)) memcpy(G2H(tag_kept[i].at), tag_kept[i].was, TAG_STRIDE);
+        free(tag_kept[i].was);
+    }
+    fprintf(stderr, "[rb] name tags: the %d slot copies written for the match put back (%s)\n", tag_nkept, why);
+    tag_nkept = 0;
+}
+/* Another player's tag: into a free slot (the last free in both copies), for the match. The slot + 1 for the panel;
+ * 0 if it couldn't be placed (that player then plays with default controls here: the match will differ). */
+static u32 tag_place(const u8 *head, int player) {
+    char nm[16]; tag_name(head, nm, sizeof nm);
+    tag_find();
+    for (int slot = tag_slots - 1; tag_lists > 0 && slot >= 0; slot--) {
+        int free_all = 1;
+        for (int l = 0; l < tag_lists; l++) {
+            u64 s = tag_list[l] + TAG_STRIDE * (u64)slot;
+            if (!tag_slot_ok(s) || ld32(s) != 0) free_all = 0;
+            for (int i = 0; i < tag_nkept; i++) if (tag_kept[i].at == s) free_all = 0;   /* (another player's this match) */
+        }
+        if (!free_all) continue;
+        for (int l = 0; l < tag_lists && tag_nkept < 2 * RBN_PLAYERS; l++) {
+            u64 s = tag_list[l] + TAG_STRIDE * (u64)slot;
+            u8 *was = malloc(TAG_STRIDE);
+            if (!was) break;
+            memcpy(was, G2H(s), TAG_STRIDE);
+            tag_kept[tag_nkept].at = s; tag_kept[tag_nkept].was = was; tag_nkept++;
+            memcpy(G2H(s), head, RBN_TAG_BYTES);
+        }
+        fprintf(stderr, "[rb] name tags: player %d's tag \"%s\" put in this PC's free slot %d for the match\n", player + 1, nm, slot);
+        return (u32)slot + 1;
+    }
+    fprintf(stderr, "[rb] name tags: player %d's tag \"%s\" has no free slot here (%d lists, %d slots): DEFAULT controls here (the match will differ if the tag changes them)\n",
+            player + 1, nm, tag_lists, tag_slots);
+    return 0;
+}
 /* ---- streamlining, item 2: the host's rules (RULES messages) ----------------------------------------------------
  * As the match is set up (player 1's record), the host reads the game's rule header (the match block + 0, 0x588 bytes:
  * stocks, time, items and the rest; 13.0.4 0x71052c41b0, ssbu-recomp PR #116's MELEE_INFO, one page on as all of
@@ -1780,6 +1901,7 @@ static void net_results_frame(Cpu *c) {
     if (end) {
         InterlockedExchange(&net_results, 0); ended = 1; t_end = now_ms();
         fprintf(stderr, "[rb] results: %s: A and B no longer mirrored\n", end);
+        tag_restore("the results are over");
         return;
     }
     for (int p = 0; p < net_n; p++)
@@ -2176,6 +2298,8 @@ HLE_WRAP(71017880c0) {
     u64 st = c->x[0];
     if (net_mode == 2 && idx == 0) {
         fprintf(stderr, "[rb] net mode: player 1's record is built (a match set-up): the %d players hold nothing until the fight\n", net_n);
+        tag_restore("a new set-up");
+        memset(tag_given, 0, sizeof tag_given);
         net_hello_wait();
         net_seed_global("match set-up");
         net_rules_setup(st);   /* (streamlining 2: the host's rules on every game) */
@@ -2200,6 +2324,7 @@ HLE_WRAP(71017880c0) {
         if (!ch_have_mine && type == 0 && slot == (u32)net_local) {
             memset(&ch_mine, 0, sizeof ch_mine);
             ch_mine.player = net_local; ch_mine.chara = ld64(st + 0x88); ch_mine.colour = ld8(st + 0x90);
+            tag_mine(st);
             if (net_local == 0) {
                 ch_mine.has_stage = 1; ch_mine.hazards = ld8(SEL_HAZ);
                 for (int k = 0; k < 0x20; k++) ch_mine.stage[k] = ld8(sel + (u64)k);
@@ -2232,10 +2357,15 @@ HLE_WRAP(71017880c0) {
                         (unsigned long long)pc->chara, (unsigned long long)was, pc->colour, pc->has_stage ? "; the stage too" : "");
             } else fprintf(stderr, "[rb] handshake: no choice from the other game after 10 min: player %d as this game has it\n", idx + 1);
         }
-        /* both games build the same two players: human, each on its own controller slot (whatever joined the
-         * panel first), no name tag (a tag brings its own controls) */
+        /* every game builds the same players: human, each on its own controller slot (whatever joined the panel
+         * first), each with its own game's name tag (a tag brings its own controls): this game's from its list, the
+         * others' put in a free slot here (version 10; before, no tag for anyone) */
+        if (!tag_given[idx]) {
+            if (idx == net_local) tag_given[idx] = ch_have_mine && ch_mine.has_tag ? tag_mine_slot : 0;
+            else if (ch_have_peer[idx] && ch_peer[idx].has_tag) tag_given[idx] = tag_place(ch_peer[idx].tag, idx);
+        }
         st32(st + 0x78, 0); st32(st + 0x210, (u32)idx); st8(st + 0x450, 0);
-        st8(st + 0x454, 0); st8(st + 0x455, 0); st32(st + 0x214, 0xffffffffu);   /* (no name-tag profile: the game's default controls, as the PR's handshake) */
+        st8(st + 0x454, 0); st8(st + 0x455, 0); st32(st + 0x214, tag_given[idx]);
     }
     f_71017880c0_orig(c);
 }

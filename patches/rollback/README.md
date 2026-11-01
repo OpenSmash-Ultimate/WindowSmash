@@ -133,6 +133,11 @@ Every game must start the fight from the same state:
 - **The seed**: the game's global random generator is pinned at the match set-up to a value the host sends.
 - **The fighters (`CHOICE`)**: each PC joins only its own controller and puts the others' choices into
   their slots.
+- **Name tags (in `CHOICE`, version 10)**: a tag's controls turn the same pads into other moves, so each PC
+  sends its player's tag (the head of its save slot: name and controls, 0x60 bytes). The others write it into a
+  free slot of their own tag list (0xF7D8-byte slots; the game keeps two copies in memory, found by searching) for
+  the match, point that player's panel at it (panel + 0x214 = slot + 1), and put the slot back once the results
+  are over.
 - **The rules (`RULES`)**: at the match set-up the host reads the game's rule header (0x588 bytes; bytes
   0–1, the mode, kept), the stage set-up's inputs (its seed and history: without the history, stages with
   variations desync) and each panel's rule kind and stock count, and sends them as a 0x5ee-byte blob. Joining
@@ -197,5 +202,6 @@ crash, back-to-back matches through the results screen.
 - **No relay or room codes**: the host shares an IP address and needs UPnP or a forwarded port. Hosts
   behind carrier-grade NAT can't host yet; WindowSmash's own relay (`runtime/net_relay.c`) is the natural fix.
 - **The pre-entrance barrier is off**, see above. **The results screen** is a mirroring workaround.
+- **The pause menu hangs in fights**: pads are keyed by the logic frame, which stands still while paused.
 - **Windows only** (UPnP through COM, the launcher window through WinForms).
 - **Separate exe**: not yet folded into `runtime\` behind a setting; happy to do that if the approach is wanted.

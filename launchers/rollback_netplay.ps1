@@ -111,9 +111,9 @@ $lanCopy = New-Button "Copy" 300 102 90 32
 $outLabel = New-Label "Friends elsewhere (internet):" 20 150 260
 $outBox = New-Object Windows.Forms.TextBox; $outBox.ReadOnly = $true; $outBox.Location = New-Object Drawing.Point(20, 180); $outBox.Width = 260
 $outCopy = New-Button "Copy" 300 177 90 32
-$addrNote = New-Label "" 20 220 420 45
-$addrDone = New-Button "Close" 340 270 100 40
-$hostStatus = New-Label "" 20 258 310 66
+$addrNote = New-Label "" 20 280 300 40
+$addrDone = New-Button "Close" 340 278 100 40
+$hostStatus = New-Label "" 20 216 420 56
 $addrPage.Controls.AddRange(@($addrInfo, $lanLabel, $lanBox, $lanCopy, $outLabel, $outBox, $outCopy, $addrNote, $hostStatus, $addrDone))
 foreach ($c in $lanLabel, $lanBox, $lanCopy, $outLabel, $outBox, $outCopy) { $c.Visible = $false }
 
@@ -129,7 +129,7 @@ $joinPage.Controls.AddRange(@($addr, $joinGo, $joinBack))
 
 # page 5: joined
 $joinedPage = New-Object Windows.Forms.Panel; $joinedPage.Dock = "Fill"
-$joinedPage.Controls.Add((New-Label "The game is starting. When it's up: Smash, then pick your fighter with your controller. The host picks the stage. Keep this window open: it says when the game waits for the others." 20 20 420 110))
+$joinedPage.Controls.Add((New-Label "The game is starting. When it's up: Smash, then pick your fighter with your controller. The host picks the stage. This window comes back when the game waits for the others." 20 20 420 110))
 $joinedDone = New-Button "Close" 340 270 100 40
 $joinStatus = New-Label "" 20 150 420 60
 $joinedPage.Controls.AddRange(@($joinedDone, $joinStatus))
@@ -170,10 +170,18 @@ $statusFile = Join-Path $root "build\rollback_status.txt"
 $statusTimer = New-Object Windows.Forms.Timer; $statusTimer.Interval = 500
 $statusTimer.Add_Tick({
     $t = ""; try { if (Test-Path $statusFile) { $t = ([IO.File]::ReadAllText($statusFile)).Trim() } } catch {}
-    if (-not $t) { $t = "Keep this window open: it says here when the game waits for players." }
     $hostStatus.Text = $t; $joinStatus.Text = $t
+    # (the game gone for 3 s, or never started: this window really closes)
+    if (Get-Process ssbu_rollback -ErrorAction SilentlyContinue) { $script:seen = $true; $script:gone = 0 }
+    elseif ((++$script:gone -ge 6 -and $script:seen) -or $script:gone -ge 120) { $script:quit = $true; $statusTimer.Stop(); $form.Close(); return }
+    # (Close only hid it: back on top when the game starts waiting)
+    if ($t -and $t -ne $script:said -and -not $form.Visible) { $form.Show(); $form.WindowState = "Normal"; $form.TopMost = $true; $form.Activate() }
+    $script:said = $t
 })
-function Start-Status { try { Remove-Item $statusFile -ErrorAction SilentlyContinue } catch {}; $statusTimer.Start() }
+# once a game is started, Close (and the X) hide the window instead: it must be there when the game waits
+$script:started = $false; $script:quit = $false; $script:seen = $false; $script:gone = 0; $script:said = ""
+$form.Add_FormClosing({ param($s, $e) if ($script:started -and -not $script:quit -and $e.CloseReason -eq "UserClosing") { $e.Cancel = $true; $form.Hide() } })
+function Start-Status { try { Remove-Item $statusFile -ErrorAction SilentlyContinue } catch {}; $script:started = $true; $statusTimer.Start() }
 $hostGo.Add_Click({
     try { Start-Status; Start-Rollback "host" $count.SelectedItem | Out-Null; Show-Page $addrPage; $timer.Start() } catch { Fail $_.Exception.Message }
 })
@@ -199,4 +207,4 @@ if ($Shot) {   # (checks: every page drawn to an image, the address page with sa
     }
     $form.Close(); exit 0
 }
-[void]$form.ShowDialog()
+[Windows.Forms.Application]::Run($form)   # (not ShowDialog: hiding a dialog would end it)

@@ -164,9 +164,9 @@ $timer.Add_Tick({
         $addrInfo.Text = "The game hasn't said its address yet: see build\rollback_address.txt in a minute."
     }
 })
-# what the game waits for at a match set-up (it draws nothing then, so it looks frozen): buildollback_status.txt
+# what the game waits for at a match set-up (it draws nothing then, so it looks frozen): build\rollback_status.txt
 foreach ($l in $hostStatus, $joinStatus) { $l.Font = New-Object Drawing.Font($form.Font.FontFamily, 11, [Drawing.FontStyle]::Bold); $l.ForeColor = [Drawing.Color]::DarkBlue }
-$statusFile = Join-Path $root "buildollback_status.txt"
+$statusFile = Join-Path $root "build\rollback_status.txt"
 $statusTimer = New-Object Windows.Forms.Timer; $statusTimer.Interval = 500
 $statusTimer.Add_Tick({
     $t = ""; try { if (Test-Path $statusFile) { $t = ([IO.File]::ReadAllText($statusFile)).Trim() } } catch {}

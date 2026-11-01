@@ -202,6 +202,6 @@ crash, back-to-back matches through the results screen.
 - **No relay or room codes**: the host shares an IP address and needs UPnP or a forwarded port. Hosts
   behind carrier-grade NAT can't host yet; WindowSmash's own relay (`runtime/net_relay.c`) is the natural fix.
 - **The pre-entrance barrier is off**, see above. **The results screen** is a mirroring workaround.
-- **The pause menu hangs in fights**: pads are keyed by the logic frame, which stands still while paused.
+- **No pause menu online**: + is ignored in fights in net mode (wire version 11), as pads are keyed by the logic frame, which stands still while paused. Offline the pause menu works (live pads while paused).
 - **Windows only** (UPnP through COM, the launcher window through WinForms).
 - **Separate exe**: not yet folded into `runtime\` behind a setting; happy to do that if the approach is wanted.

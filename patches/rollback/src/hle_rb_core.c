@@ -300,6 +300,18 @@ static int net_local;                 /* (this game's player: defined with the n
 volatile LONG net_results;            /* (the results screen: see net_results_frame) */
 volatile LONG net_menu_mine;          /* (this game's player's A and B there, as rb_pad read them) */
 volatile LONG net_menu_remote[8];     /* (each other player's, from its game) */
+/* (offline) Is the game paused: the logic frame the same as at the last fight frame, outside a load's re-run frames?
+ * Worked out once a fight frame; pz_extra counts paused frames, to keep the pads' sampling number moving. */
+static u32 pz_logic = 0xffffffffu; static long long pz_frames = -1; static int pz_paused; static volatile LONG64 pz_extra;
+static int rb_paused(void) {
+    if (S.frames != pz_frames) {
+        u32 lf = ld32(LOGIC_FRAME);
+        pz_paused = rb_fast <= 0 && lf == pz_logic;
+        if (pz_paused) InterlockedIncrement64(&pz_extra);
+        pz_logic = lf; pz_frames = S.frames;
+    }
+    return pz_paused;
+}
 void rb_pad(u32 id, u64 *buttons, i32 *lx, i32 *ly, i32 *rx, i32 *ry, i32 *lt, i32 *rt) {
     if (net_countdown && !S.in_fight && id < (u32)net_n) { *buttons = 0; *lx = *ly = *rx = *ry = *lt = *rt = 0; return; }
     if (net_results && !S.in_fight && id < (u32)net_n) {   /* (the results screen: this player's A and B on every card) */
@@ -308,6 +320,12 @@ void rb_pad(u32 id, u64 *buttons, i32 *lx, i32 *ly, i32 *rx, i32 *ry, i32 *lt, i
         return;
     }
     if (!rb_on || !S.in_fight || id >= 8) return;
+    /* The pause menu (10-31: it hung, offline and online). Every pad in a fight is keyed by the logic frame, which
+     * stands still while paused, so the + that opened it came back on every read and nothing got out. In net mode
+     * + is taken out of every player's pads in a fight (as the official online play has no pause; version 11: every
+     * game does it); offline, while the logic frame stands still the pads are live, not the tape. */
+    if (net_mode == 2) *buttons &= ~(1ull << 10);
+    else if (rb_paused()) return;
     if (id == 0 && !seg_poll) seg_poll = now_ms();
     if (ntin < 0) test_input_parse();
     if (tape_on < 0) { const char *e = getenv("SSBU_RB_TAPE"); tape_on = !(e && *e == '0'); }
@@ -324,7 +342,10 @@ void rb_pad(u32 id, u64 *buttons, i32 *lx, i32 *ly, i32 *rx, i32 *ry, i32 *lt, i
             }
         }
     }
-    if (net_pad_for(id, ld32(LOGIC_FRAME), buttons, lx, ly, rx, ry, lt, rt)) return;   /* (loop mode: the bots, M5) */
+    if (net_pad_for(id, ld32(LOGIC_FRAME), buttons, lx, ly, rx, ry, lt, rt)) {   /* (loop mode: the bots, M5) */
+        if (net_mode == 2) *buttons &= ~(1ull << 10);   /* (the other players' too, as they came) */
+        return;
+    }
     if (!tape_on) return;
     u32 key = ld32(LOGIC_FRAME);
     if (key >= (1u << 20)) return;
@@ -361,7 +382,9 @@ void rb_pad(u32 id, u64 *buttons, i32 *lx, i32 *ly, i32 *rx, i32 *ry, i32 *lt, i
 int rb_pad_sampling(u64 *sampling) {
     if (!rb_on) return 0;
     if (!S.in_fight) { *sampling = (u64)InterlockedIncrement64(&rb_sampling); return 1; }
-    *sampling = (u64)rb_sampling_base + ld32(LOGIC_FRAME);
+    /* (offline, paused: on by one a frame, so the game sees each new press; never back after: the count stays) */
+    if (net_mode != 2) rb_paused();
+    *sampling = (u64)rb_sampling_base + ld32(LOGIC_FRAME) + (net_mode != 2 ? (u64)pz_extra : 0);
     if ((LONG64)*sampling > rb_sampling) InterlockedExchange64(&rb_sampling, (LONG64)*sampling);   /* (after the fight: on from here) */
     return 1;
 }

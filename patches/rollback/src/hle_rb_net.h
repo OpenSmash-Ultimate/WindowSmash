@@ -73,8 +73,9 @@ int rbn_parse(const uint8_t *buf, size_t len, RbnMsg *m);       /* 1: a valid me
  * no seed until it has chosen, so player 2 takes both at once). */
 enum { RBN_MSG_HELLO = 2 };
 #define RBN_HELLO_BYTES 40
-#define RBN_VERSION 10  /* (3: PADS in runs; 4: a frame hash final once its own pads are real; M6. 5: an ack and a frame heard per player;
-                            * 6: Host/Join, a joiner's number from the host; M7. 7: RULES. 8: READY. 9: MENU. 10: the name tag in CHOICE) */
+#define RBN_VERSION 11  /* (3: PADS in runs; 4: a frame hash final once its own pads are real; M6. 5: an ack and a frame heard per player;
+                            * 6: Host/Join, a joiner's number from the host; M7. 7: RULES. 8: READY. 9: MENU. 10: the name tag in CHOICE.
+                            * 11: no + in fights (no pause menu online): every game must take it out alike) */
 /* (M7: players, byte 5: how many play, from the host; 0 from the others.
  * Host/Join, version 6: a joining game has no number yet: player -1 (0xFF on the wire), and its seed field carries a
  * random join id instead, so the host tells two joiners from one address apart and knows one that comes back. The

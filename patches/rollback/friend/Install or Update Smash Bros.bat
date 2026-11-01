@@ -19,13 +19,13 @@ New-Item -ItemType Directory -Force -Path $memDir | Out-Null
 try { Start-Transcript -LiteralPath $logFile -Force | Out-Null } catch {}
 Add-Type -AssemblyName System.Windows.Forms
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$owner = New-Object System.Windows.Forms.Form -Property @{ TopMost = $true; ShowInTaskbar = $false }
+$topForm = New-Object System.Windows.Forms.Form   # (not $owner: PowerShell names ignore case, and $OWNER is the GitHub user) -Property @{ TopMost = $true; ShowInTaskbar = $false }
 function Say([string]$text, [string]$icon = "Information") {
-    Write-Host $text; [void][System.Windows.Forms.MessageBox]::Show($owner, $text, "SMASH BROS Multiplayer", "OK", $icon)
+    Write-Host $text; [void][System.Windows.Forms.MessageBox]::Show($topForm, $text, "SMASH BROS Multiplayer", "OK", $icon)
 }
 function Ask([string]$text, [string]$buttons = "YesNo") {
     Write-Host "? $text"
-    $a = [string][System.Windows.Forms.MessageBox]::Show($owner, $text, "SMASH BROS Multiplayer", $buttons, "Question")
+    $a = [string][System.Windows.Forms.MessageBox]::Show($topForm, $text, "SMASH BROS Multiplayer", $buttons, "Question")
     Write-Host "  -> $a"; return $a
 }
 function Fail([string]$text) {
@@ -56,7 +56,7 @@ function Pick-Folder {
         $dlg = New-Object System.Windows.Forms.FolderBrowserDialog
         $dlg.Description = "Choose your WindowSmash folder (the one with ""dump"" and ""launchers"" in it). The folder just above it works too."
         $dlg.ShowNewFolderButton = $false
-        if ($dlg.ShowDialog($owner) -ne "OK") { Fail "No folder chosen: nothing was installed." }
+        if ($dlg.ShowDialog($topForm) -ne "OK") { Fail "No folder chosen: nothing was installed." }
         Write-Host "picked: $($dlg.SelectedPath)"
         $c = @(Find-Game $dlg.SelectedPath)
         foreach ($g in $c) { if ((Ask "Found your game here:`n`n$g`n`nInstall multiplayer into this folder?") -eq "Yes") { return $g } }

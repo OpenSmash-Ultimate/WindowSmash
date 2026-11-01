@@ -21,6 +21,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <windows.h>
+#include <intrin.h>
+#include <xmmintrin.h>
 #include <time.h>
 
 #include "host.h"
@@ -1052,6 +1054,35 @@ static u32 net_final_frame(u32 key, u64 *h) {
 }
 /* (the first desync: every player's pads for the frames before it, as this game played them - the other PC's log has
  * the same lines, so the two show whether the pads or the game went apart) */
+/* (v0.9.6, diagnostics: desyncs with every pad alike on both PCs (three matches over the internet, 11-01): one fighter's action or position
+ * apart, the PC that rolls back more being one side) The last RB_HIST rollbacks, and on the first desync every frame
+ * kept (check_recs: the last 64, hashed every frame now) and those rollbacks, to set beside the other PC's log: the first
+ * frame apart, and whether this PC ran it again after a rollback. */
+#define RB_HIST 32
+static struct { u32 at, to; int depth, older; } rb_hist[RB_HIST];
+static long long rb_hist_n;
+static void rb_hist_add(u32 at, u32 to, int older) {
+    int k = (int)(rb_hist_n++ % RB_HIST);
+    rb_hist[k].at = at; rb_hist[k].to = to; rb_hist[k].depth = (int)(at - to); rb_hist[k].older = older;
+}
+static void net_desync_dump(void) {
+    fprintf(stderr, "[rb]   frames kept here (logic frame, pads all real when hashed or not, hash, each fighter):\n");
+    u32 lo = ~0u;
+    for (int k = 0; k < 64; k++) if (check_recs[k].key && check_recs[k].key < lo) lo = check_recs[k].key;
+    for (u32 key = lo; lo != ~0u && key < lo + 64 * (u32)(net_every > 0 ? net_every : 1); key++) {
+        const CheckRec *r = &check_recs[(key / (u32)(net_every > 0 ? net_every : 10)) % 64];
+        if (r->key != key) continue;
+        char t[256];
+        fprintf(stderr, "[rb]   kept %u %s %08x\n", key, r->final ? "real" : "guess", (u32)r->h);
+        for (u32 q = 0; q < r->f.n; q++) { frec_text(t, sizeof t, &r->f.f[q]); fprintf(stderr, "[rb]     %s\n", t); }
+    }
+    fprintf(stderr, "[rb]   the last rollbacks here (%lld in this fight):", rb_hist_n);
+    for (long long k = rb_hist_n > RB_HIST ? rb_hist_n - RB_HIST : 0; k < rb_hist_n; k++) {
+        int i = (int)(k % RB_HIST);
+        fprintf(stderr, " %u->%u%s", rb_hist[i].at, rb_hist[i].to, rb_hist[i].older ? "(older)" : "");
+    }
+    fprintf(stderr, "\n");
+}
 static void net_desync_pads(u32 f) {
     for (int p = 0; p < net_n; p++) {
         fprintf(stderr, "[rb]   pads of player %d%s, frames %u..%u:", p + 1, p == net_local ? " (this game's)" : "", f > 20 ? f - 19 : 1, f);
@@ -1078,7 +1109,7 @@ static void net_compare(u32 key) {
                     fprintf(stderr, "[rb] net mode: DESYNC with player %d at logic frame %u (ours %08x, theirs %08x)%s\n", p + 1, f, (u32)net_final[i],
                             net_peer_check[p][i], net_checks <= 1 ? ": the games did not start the same match (characters, colours, stage, rules or the seed differ)" : "");
                     check_desync_show(f);
-                    if (net_desyncs == 1) net_desync_pads(f);
+                    if (net_desyncs == 1) { net_desync_pads(f); net_desync_dump(); }
                 }
             }
         }
@@ -1130,7 +1161,7 @@ static void net_receive(u32 key) {
                         fprintf(stderr, "[rb] net mode: DESYNC with player %d at logic frame %u (ours %08x, theirs %08x)\n", p + 1, m.check_frame, (u32)net_final[i],
                                 net_peer_check[p][i]);
                         check_desync_show(m.check_frame);
-                        if (net_desyncs == 1) net_desync_pads(m.check_frame);
+                        if (net_desyncs == 1) { net_desync_pads(m.check_frame); net_desync_dump(); }
                     }
                 }
                 net_peer_check[p][i] = 0;
@@ -1249,7 +1280,7 @@ static void net_step(Cpu *c, u64 frame) {
     }
     u32 i = key - net_key0;
     if (i < 1u << 20) {
-        if (net_every < 0) { const char *e = getenv("SSBU_RB_NET_CHECK_EVERY"); net_every = e && atoi(e) > 0 ? atoi(e) : 10; }
+        if (net_every < 0) { const char *e = getenv("SSBU_RB_NET_CHECK_EVERY"); net_every = e && atoi(e) > 0 ? atoi(e) : 1; }   /* (v0.9.6: every frame, was 10: a desync's first frame exact) */
         if (rb_fast <= 0 && !net_done && key % (u32)net_every == 0) {
             /* the fighters and the generators, all but generator 1: something outside the fight (on Final
              * Destination; its background?) draws from it every other frame, starting at a different frame
@@ -1364,6 +1395,7 @@ static void net_step(Cpu *c, u64 frame) {
     for (u32 f = found + 1; f <= key; f++) if (f - net_key0 < 1u << 20) net_final[f - net_key0] = 0;
     pending_fast = depth;
     ring_load_t0 = now_ms();
+    rb_hist_add(key, found, 0);
     rb_load_age(c, frame, age);   /* (returns only if refused) */
     net_rollbacks--; net_rerun -= depth; net_depth[depth < 15 ? depth : 15]--;
     /* M7: refused (a thread on another fiber than at that save, even after waiting): an older state may have had
@@ -1375,6 +1407,7 @@ static void net_step(Cpu *c, u64 frame) {
         net_rollbacks++; net_rerun += d; net_depth[d < 15 ? d : 15]++; net_older++;
         for (u32 f = tag + 1; f <= key; f++) if (f - net_key0 < 1u << 20) net_final[f - net_key0] = 0;
         pending_fast = d;
+        rb_hist_add(key, tag, 1);
         rb_load_age(c, frame, older);   /* (returns only if refused) */
         net_rollbacks--; net_rerun -= d; net_depth[d < 15 ? d : 15]--; net_older--;
     }
@@ -2035,6 +2068,13 @@ static void net_left_send(void) {
 static double net_fight_t0;   /* (v0.9.3: when this fight began here: a player never heard from in it is gone after NET_SILENT_MS) */
 static void net_gone_reset(void) {
     net_fight_t0 = now_ms();
+    rb_hist_n = 0;
+    {   /* (v0.9.6, diagnostics: the main thread's floating-point mode and the processor, to set beside the other PC's) */
+        int r[4]; char brand[49] = "";
+        __cpuid(r, (int)0x80000000);
+        if ((unsigned)r[0] >= 0x80000004u) for (int k = 0; k < 3; k++) { __cpuid(r, (int)(0x80000002 + k)); memcpy(brand + 16 * k, r, 16); }
+        fprintf(stderr, "[rb] fight start: this thread's MXCSR %08x; processor %s\n", _mm_getcsr(), brand);
+    }
     if (pre_frames) {
         for (int k = 0; k < 3; k++) net_pre_send_n(PRE_AT_GO);   /* (nobody waits for this game before the fight now) */
         fprintf(stderr, "[rb] before the fight: GO! at frame %lld since the set-up (logic frames %u); waited %.0f ms in all for the others, over %lld frames\n",

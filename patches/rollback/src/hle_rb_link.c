@@ -271,11 +271,16 @@ static int welcome(const struct sockaddr_in *from) {
                        * again comes from another port - and the core takes it in only as a valid joiner's hello) */
 }
 /* one message waiting, into buf: its length, or 0 when none */
+/* (v0.9.6, tests: SSBU_RB_LINK_DELAY_MS=<n> holds every message n ms after it arrived, so two games on one PC roll back
+ * as games over the internet do; off unless set) */
+static double link_delay_ms = -1;
 int rbl_recv(void *buf, int cap) {
     if (sock == INVALID_SOCKET) return 0;
+    if (link_delay_ms < 0) { const char *e = getenv("SSBU_RB_LINK_DELAY_MS"); link_delay_ms = e && atof(e) > 0 ? atof(e) : 0; }
     for (;;) {
         AcquireSRWLockExclusive(&q_lock);
         if (q_head == q_tail) { ReleaseSRWLockExclusive(&q_lock); return 0; }
+        if (link_delay_ms > 0 && clock_ms() - q[q_head % QN].at < link_delay_ms) { ReleaseSRWLockExclusive(&q_lock); return 0; }
         unsigned k = q_head++ % QN;
         struct sockaddr_in from = q[k].from;
         int n = q[k].len < cap ? q[k].len : cap;

@@ -782,7 +782,7 @@ static void net_wait_say(const char *what) {
         snprintf(s, sizeof s, "%s (%d of %d players here)", what, k, net_n);
     } else if (what) snprintf(s, sizeof s, "%s", what);
     gfx_set_status(s);
-    FILE *f = fopen("build\rollback_status.txt", "w");
+    FILE *f = fopen("build\\rollback_status.txt", "w");
     if (f) { fputs(s, f); fclose(f); }
 }
 int rbl_who(void);

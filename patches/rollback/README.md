@@ -117,7 +117,7 @@ doubled sound right at the start of a match that settles by itself.
   players only send out, so only the host needs an open port.
 - **Messages** (wire version 9): `PADS` (inputs, run-length encoded, with per-player acks), `HELLO`
   (join and the round trip), `CHOICE` (each player's fighter), `RULES` (the host's ruleset, chunked),
-  `READY`, `MENU` (results-screen presses) and `LEFT` (a game's fight is over).
+  `READY`, `MENU` (results-screen presses), `LEFT` (a game's fight is over) and `PRE` (logic frames before the fight).
 - **A player gone from a fight**: when a player's `LEFT` comes, or nothing has come from its game for 8 s, the
   others stop waiting for its inputs, and its character stands still. If this game's fight runs on past the
   other's (a desync, or a closed game), a message box says so. Before this, a game waited up to 10 minutes.
@@ -165,8 +165,15 @@ Every game must start the fight from the same state:
 - **The GO! stutter.** The first full save copied all of memory at the moment GO! appeared (358–935 ms).
   Now the full copy is taken at the match set-up (as loading starts) and kept current every 4 frames through
   the entrances, each refresh waiting at most 4 ms for busy threads (or skipped). The ring is dropped when a
-  fight ends. A wait-for-everyone barrier before the entrances exists behind `SSBU_RB_PRE_BARRIER=1` but is
-  off: there's no reliable "loading done" signal yet.
+  fight ends.
+- **Reaching GO! together.** A slower PC finished loading later, so the other game reached GO! first and froze
+  there waiting for its inputs (up to a second). The game's logic frame turns out to stand still through the
+  loading and count from the entrances on, reaching GO! at the same logic frame on every game (216), while the
+  plain frame counts differ by up to 50. So before the fight each game sends its logic frames since the set-up
+  every frame (`PRE`), and one ahead of the others waits: the game that finished loading first holds at the start
+  of its entrances until the others have loaded, then the entrances run in step and GO! comes together. A game at
+  GO! says so, nobody is waited for after 2 s without a `PRE`, and 20 s of waiting in all is the most. (The older
+  barrier behind `SSBU_RB_PRE_BARRIER=1`, keyed on a "loading done" guess, is still there and off.)
 - **The results screen.** After a fight each game runs its menus locally, so nobody saw the others' cards
   ready. While the results show (`FighterManager__is_result_mode_impl`), each game presses its own player's
   A/B on every player's card and passes them on (`MENU`). It stops when the fighters are let go (the

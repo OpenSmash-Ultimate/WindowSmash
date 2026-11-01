@@ -966,6 +966,7 @@ static void net_choice_send(int ask);
 static int net_choice_take(const u8 *buf, int len);
 static int net_rules_take(const u8 *buf, int len);
 static int net_ready_take(const u8 *buf, int len);
+static int net_pre_take(const u8 *buf, int len);
 static int net_menu_take(const u8 *buf, int len);
 static u64 net_mix(u64 h, u64 v) { h ^= v + 0x9e3779b97f4a7c15ull + (h << 6) + (h >> 2); return h * 0xff51afd7ed558ccdull; }
 /* the bots: a stick direction and a button held a few frames at a time, as a frame's own function */
@@ -1098,6 +1099,7 @@ static void net_receive(u32 key) {
         if (net_ready_take(buf, n)) continue;
         if (net_menu_take(buf, n)) continue;
         if (net_left_take(buf, n)) continue;
+        if (net_pre_take(buf, n)) continue;
         if (net_choice_take(buf, n)) continue;
         if (!rbn_parse(buf, (size_t)n, &m) || m.player == net_local || m.player >= net_n) continue;
         if (rbl_accept(m.player) < 0) continue;
@@ -1493,6 +1495,7 @@ static void net_hello(int now) {
         RbnHello h;
         if (net_rules_take(buf, len)) continue;
         if (net_ready_take(buf, len)) continue;
+        if (net_pre_take(buf, len)) continue;
         if (net_menu_take(buf, len)) continue;
         if (net_choice_take(buf, len)) continue;
         if (!rbn_hello_parse(buf, (size_t)len, &h)) continue;   /* (the peer's pads from a fight it is already in: they come again) */
@@ -1814,7 +1817,78 @@ static void net_rules_setup(u64 st) {
 static int pre_done, pre_quiet;
 static long long pre_frames;
 static int ready_from[RBN_PLAYERS], all_ready;
-static void net_pre_reset(void) { pre_done = 0; pre_quiet = 0; pre_frames = 0; memset(ready_from, 0, sizeof ready_from); all_ready = 0; }
+/* (v0.9.4, "the sync hangs too long on GO!") Every game comes to GO! the same number of frames after the set-up (hj2),
+ * but one whose frames ran late in the loading (a slower PC, its first whole copy: 897 ms against 328 on the host, in a match over the internet) got
+ * there later, and the others waited for its pads at GO!: up to a second frozen on it. Now every game says its frame
+ * count since the set-up every frame (PRE), and one more than PRE_SLACK frames (plus the input delay, for the trip)
+ * ahead of a player waits for it at its next frame: the waiting happens in the loading screen, a little at a time, and
+ * all come to GO! together. PRE_SYNC_MAX_MS of waiting in all at most, then each goes on as before. */
+#define PRE_SLACK 1
+#define PRE_SYNC_MAX_MS 20000.0
+/* (pre1, one PC: GO! came at frame 449 on the host and 467 on the joiner - not the same count after all. The host went
+ * into its fight and said no more, so the joiner waited on it the whole PRE_SYNC_MAX_MS, while the host waited at GO! for
+ * its pads. Now a game at GO! says so (PRE_AT_GO) and nobody waits for it after; a player whose count stands still
+ * PRE_STALL_MS is no longer waited for either; and the GO! line gives the logic frames since the set-up too, to see
+ * whether those agree between the games better than the frames do.)
+ * (pre3: they do. The logic frame stands still at 1 through the loading and runs from the entrances on, and GO! came at
+ * logic frame 216 on both games - at frame 431 on one and 464 on the other. So PRE now carries the logic frames since the
+ * set-up, and the game whose loading ended first waits at the start of its entrances until the others' loading ends:
+ * the entrances then run together. "Stands still" is not quiet: a player is waited for while its PRE keep coming.) */
+#define PRE_AT_GO 0xFFFFFFFFu
+#define PRE_STALL_MS 2000.0
+static long long pre_peer[RBN_PLAYERS];   /* (each player's newest frame count since the set-up, -1: none heard) */
+static double pre_peer_ms[RBN_PLAYERS];   /* (when it last moved) */
+static double pre_waited_ms;
+static long long pre_waits;
+static u32 pre_logic0, pre_logic_last;   /* (the logic frame at the set-up, and on the last frame before the fight) */
+static void net_pre_reset(void) {
+    pre_done = 0; pre_quiet = 0; pre_frames = 0; memset(ready_from, 0, sizeof ready_from); all_ready = 0;
+    for (int p = 0; p < RBN_PLAYERS; p++) { pre_peer[p] = -1; pre_peer_ms[p] = 0; }
+    pre_waited_ms = 0; pre_waits = 0;
+}
+static void net_pre_send_n(u32 frames) {
+    u8 out[RBN_PRE_BYTES];
+    RbnPre r = {net_local, frames};
+    size_t k = net_local >= 0 ? rbn_pre_build(out, sizeof out, &r) : 0;
+    if (k) rbl_send(out, (int)k);
+}
+static void net_pre_send(void) { net_pre_send_n(pre_logic_last - pre_logic0); }   /* (pre3: the logic frames, not the frames) */
+static int net_pre_take(const u8 *buf, int len) {
+    RbnPre r;
+    if (!rbn_pre_parse(buf, (size_t)len, &r)) return 0;
+    if (r.player == net_local || r.player >= net_n || rbl_accept(r.player) < 0) return 1;
+    if (net_local == 0) for (int k = 1; k < net_n; k++) if (k != r.player) rbl_send_to(k, buf, len);   /* (the host passes it on) */
+    if (S.in_fight || !net_countdown) return 1;
+    long long f = r.frames == PRE_AT_GO ? 0x7FFFFFFFFFFFll : (long long)r.frames;   /* (at GO!: never waited for again) */
+    if (f > pre_peer[r.player]) pre_peer[r.player] = f;
+    pre_peer_ms[r.player] = now_ms();   /* (heard: its logic frame stands still all through its loading) */
+    return 1;
+}
+/* (each frame before the fight) this game's count to the others; then, while it is ahead of a player heard from, wait */
+static void net_pre_step(void) {
+    if (pre_frames == 1) pre_logic0 = ld32(LOGIC_FRAME);
+    pre_logic_last = ld32(LOGIC_FRAME);
+    if (pre_frames % 30 == 0) {   /* (the timeline: does the logic frame stand still through the loading, and the same on every game?) */
+        long long other = -1;
+        for (int p = 0; p < net_n && p < RBN_PLAYERS; p++) if (p != net_local && pre_peer[p] >= 0) { other = pre_peer[p]; break; }
+        fprintf(stderr, "[rb] before the fight: frame %lld, logic frames %u since the set-up; the other game's last heard %lld; waited %.0f ms so far\n",
+                pre_frames, pre_logic_last - pre_logic0, other, pre_waited_ms);
+    }
+    net_pre_send();
+    double t0 = now_ms(), last = t0;
+    for (;;) {
+        long long low = -1;
+        double now = now_ms();
+        for (int p = 0; p < net_n && p < RBN_PLAYERS; p++)
+            if (p != net_local && pre_peer[p] >= 0 && now - pre_peer_ms[p] < PRE_STALL_MS && (low < 0 || pre_peer[p] < low)) low = pre_peer[p];
+        if (low < 0 || (long long)(pre_logic_last - pre_logic0) <= low + PRE_SLACK + net_delay || pre_waited_ms + (now_ms() - t0) > PRE_SYNC_MAX_MS) break;
+        Sleep(1);
+        net_hello(0);
+        if (now_ms() - last > 16) { net_pre_send(); last = now_ms(); watchdog_present(); }
+    }
+    double w = now_ms() - t0;
+    if (w > 0.5) { pre_waited_ms += w; pre_waits++; }
+}
 static void net_ready_send(int all) {
     u8 out[RBN_READY_BYTES];
     RbnReady r = {net_local < 0 ? 0 : net_local, all};
@@ -1845,6 +1919,7 @@ extern double rb_park_quick_ms;   /* (hle_rb_state.c) */
 static long long pre_refreshed, pre_skipped;
 static void net_pre_fight(Cpu *c, u64 frame) {
     pre_frames++;
+    net_pre_step();   /* (v0.9.4: in step with the others through the loading) */
     /* (hj2: "fighters not yet" on every frame to GO! - the game gives the players their fighters at GO!, though the
      * fighters do their entrances before - so the barrier never came, and the whole copy stayed at GO!: 358 ms here,
      * 526 ms on PC 2, whose GO! then came that much later: the stutter. The two games had come to GO! the same number
@@ -1960,6 +2035,11 @@ static void net_left_send(void) {
 static double net_fight_t0;   /* (v0.9.3: when this fight began here: a player never heard from in it is gone after NET_SILENT_MS) */
 static void net_gone_reset(void) {
     net_fight_t0 = now_ms();
+    if (pre_frames) {
+        for (int k = 0; k < 3; k++) net_pre_send_n(PRE_AT_GO);   /* (nobody waits for this game before the fight now) */
+        fprintf(stderr, "[rb] before the fight: GO! at frame %lld since the set-up (logic frames %u); waited %.0f ms in all for the others, over %lld frames\n",
+                pre_frames, pre_logic_last - pre_logic0, pre_waited_ms, pre_waits);
+    }
     memset(net_gone_after, 0, sizeof net_gone_after);
     memset(net_pads_heard_ms, 0, sizeof net_pads_heard_ms);
     memset(net_gone_shown, 0, sizeof net_gone_shown);

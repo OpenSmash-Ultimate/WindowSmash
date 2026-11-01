@@ -213,6 +213,15 @@ int main(int argc, char **argv) {
         r.off = 0x500;   /* (0x500 + 0x300 > 0x5ee) */
         if (rbn_rules_build(b, sizeof b, &r)) { fprintf(stderr, "FAIL: a RULES chunk past the blob built%c", 10); return 1; }
     }
+    {   /* PRE (v0.9.4): built and parsed back the same; a wrong length or a player past the table refused */
+        RbnPre a = {3, 0x01020304u}, g;
+        uint8_t b[RBN_PRE_BYTES + 1];
+        size_t n = rbn_pre_build(b, sizeof b, &a);
+        if (n != RBN_PRE_BYTES || !rbn_pre_parse(b, n, &g) || g.player != 3 || g.frames != a.frames || rbn_pre_parse(b, n - 1, &g) ||
+            rbn_parse(b, n, &(RbnMsg){0})) { fprintf(stderr, "FAIL: PRE round trip%c", 10); return 1; }
+        RbnPre bad = {RBN_PLAYERS, 1};
+        if (rbn_pre_build(b, sizeof b, &bad)) { fprintf(stderr, "FAIL: a PRE from player %d built%c", RBN_PLAYERS, 10); return 1; }
+    }
     {   /* PADS in runs (M6): 64 pads held alike are one run; a mixed sequence comes back pad for pad; runs that don't
          * add up to the count are refused */
         static RbnMsg m, g;

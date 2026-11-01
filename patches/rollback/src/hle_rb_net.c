@@ -284,6 +284,16 @@ int rbn_left_parse(const uint8_t *b, size_t len, RbnLeft *l) {
     l->player = b[1]; l->frame = get32(b + 4);
     return 1;
 }
+size_t rbn_pre_build(uint8_t *b, size_t cap, const RbnPre *p) {
+    if (cap < RBN_PRE_BYTES || p->player < 0 || p->player >= RBN_PLAYERS) return 0;
+    b[0] = RBN_MSG_PRE; b[1] = (uint8_t)p->player; b[2] = b[3] = 0; put32(b + 4, p->frames);
+    return RBN_PRE_BYTES;
+}
+int rbn_pre_parse(const uint8_t *b, size_t len, RbnPre *p) {
+    if (len != RBN_PRE_BYTES || b[0] != RBN_MSG_PRE || b[1] >= RBN_PLAYERS) return 0;
+    p->player = b[1]; p->frames = get32(b + 4);
+    return 1;
+}
 
 /* ---- frame advantage ---- */
 static void sync_clear(void) { memset(ndiff, 0, sizeof ndiff); memset(next_diff, 0, sizeof next_diff); }

@@ -134,6 +134,14 @@ enum { RBN_MSG_LEFT = 7 };
 typedef struct RbnLeft { int player; uint32_t frame; } RbnLeft;
 size_t rbn_left_build(uint8_t *buf, size_t cap, const RbnLeft *l);
 int rbn_left_parse(const uint8_t *buf, size_t len, RbnLeft *l);
+/* PRE (v0.9.4): how many frames a game has run since the match set-up, every frame until the fight: a game ahead of the
+ * others waits for them there, in the loading screen, so they all come to GO! together instead of one waiting at GO!.
+ * type 8 | player u8 | 0 u8 x2 | frames u32. (Older games drop it, and a game never heard from this way isn't waited for.) */
+enum { RBN_MSG_PRE = 8 };
+#define RBN_PRE_BYTES 8
+typedef struct RbnPre { int player; uint32_t frames; } RbnPre;
+size_t rbn_pre_build(uint8_t *buf, size_t cap, const RbnPre *p);
+int rbn_pre_parse(const uint8_t *buf, size_t len, RbnPre *p);
 int rbn_ready_parse(const uint8_t *buf, size_t len, RbnReady *r);
 int rbn_rules_parse(const uint8_t *buf, size_t len, RbnRules *r);
 int rbn_choice_parse(const uint8_t *buf, size_t len, RbnChoice *c);

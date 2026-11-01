@@ -113,7 +113,7 @@ $outBox = New-Object Windows.Forms.TextBox; $outBox.ReadOnly = $true; $outBox.Lo
 $outCopy = New-Button "Copy" 300 177 90 32
 $addrNote = New-Label "" 20 220 420 45
 $addrDone = New-Button "Close" 340 270 100 40
-$hostStatus = New-Label "" 20 270 310 45
+$hostStatus = New-Label "" 20 258 310 66
 $addrPage.Controls.AddRange(@($addrInfo, $lanLabel, $lanBox, $lanCopy, $outLabel, $outBox, $outCopy, $addrNote, $hostStatus, $addrDone))
 foreach ($c in $lanLabel, $lanBox, $lanCopy, $outLabel, $outBox, $outCopy) { $c.Visible = $false }
 
@@ -154,7 +154,7 @@ $timer.Add_Tick({
     $a = Read-Addresses
     if ($a) {
         $timer.Stop()
-        $addrInfo.Text = "Send your friends the address that fits, then start Smash and pick your fighter (and the stage). Keep this window open: it says when the game waits for players."
+        $addrInfo.Text = "Send your friends the address that fits, then start Smash and pick your fighter (and the stage)."
         foreach ($c in $lanLabel, $lanBox, $lanCopy) { $c.Visible = $true }
         $lanBox.Text = $a.Lan
         if ($a.Outside) { foreach ($c in $outLabel, $outBox, $outCopy) { $c.Visible = $true }; $outBox.Text = $a.Outside }
@@ -170,6 +170,7 @@ $statusFile = Join-Path $root "build\rollback_status.txt"
 $statusTimer = New-Object Windows.Forms.Timer; $statusTimer.Interval = 500
 $statusTimer.Add_Tick({
     $t = ""; try { if (Test-Path $statusFile) { $t = ([IO.File]::ReadAllText($statusFile)).Trim() } } catch {}
+    if (-not $t) { $t = "Keep this window open: it says here when the game waits for players." }
     $hostStatus.Text = $t; $joinStatus.Text = $t
 })
 function Start-Status { try { Remove-Item $statusFile -ErrorAction SilentlyContinue } catch {}; $statusTimer.Start() }
@@ -186,8 +187,9 @@ $addr.Add_KeyDown({ if ($_.KeyCode -eq "Enter") { $joinGo.PerformClick() } })
 if ($Shot) {   # (checks: every page drawn to an image, the address page with sample addresses; no game started)
     $form.Show(); [Windows.Forms.Application]::DoEvents()
     foreach ($c in $lanLabel, $lanBox, $lanCopy, $outLabel, $outBox, $outCopy) { $c.Visible = $true }
+    $hostStatus.Text = $joinStatus.Text = "Waiting for players to join... (1 of 3 players here)"
     $lanBox.Text = "192.168.1.20"; $outBox.Text = "203.0.113.7"
-    $addrInfo.Text = "Send your friends the address that fits, then start Smash and pick your fighter (and the stage). Keep this window open: it says when the game waits for players."
+    $addrInfo.Text = "Send your friends the address that fits, then start Smash and pick your fighter (and the stage)."
     $i = 0
     foreach ($pg in $pages) {
         Show-Page $pg; [Windows.Forms.Application]::DoEvents()

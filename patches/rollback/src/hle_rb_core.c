@@ -350,7 +350,9 @@ void rb_pad(u32 id, u64 *buttons, i32 *lx, i32 *ly, i32 *rx, i32 *ry, i32 *lt, i
      * stands still while paused, so the + that opened it came back on every read and nothing got out. In net mode
      * + is taken out of every player's pads in a fight (as the official online play has no pause; version 11: every
      * game does it); offline, while the logic frame stands still the pads are live, not the tape. */
-    if (net_mode == 2) *buttons &= ~(1ull << 10);
+    /* (v0.9.3: only in an online fight - Training, or the controls screen's test fight, played here alone, pauses as
+     * offline: + was taken there too, and Training has no other way out) */
+    if (net_mode == 2 && net_armed) *buttons &= ~(1ull << 10);
     else if (rb_paused()) return;
     if (id == 0 && !seg_poll) seg_poll = now_ms();
     if (ntin < 0) test_input_parse();
@@ -702,6 +704,7 @@ static void ring_test(Cpu *c, u64 frame) {
 /* (v0.9) a player gone from this fight: its game said its fight was over (LEFT), or nothing came from it for
  * NET_GONE_MS while this game waited. Its pads past net_gone_after are none, and nobody waits for them. */
 #define NET_GONE_MS 8000.0
+#define NET_SILENT_MS 30000.0   /* (v0.9.3: nothing at all from a player since the fight began here: its game never started it) */
 static u32 net_gone_after[RBN_PLAYERS];
 static const char *net_gone_why[RBN_PLAYERS];
 static int net_gone_shown[RBN_PLAYERS];
@@ -1954,7 +1957,9 @@ static void net_left_send(void) {
     size_t k = rbn_left_build(out, sizeof out, &l);
     for (int i = 0; k && i < 3; i++) rbl_send(out, (int)k);
 }
+static double net_fight_t0;   /* (v0.9.3: when this fight began here: a player never heard from in it is gone after NET_SILENT_MS) */
 static void net_gone_reset(void) {
+    net_fight_t0 = now_ms();
     memset(net_gone_after, 0, sizeof net_gone_after);
     memset(net_pads_heard_ms, 0, sizeof net_pads_heard_ms);
     memset(net_gone_shown, 0, sizeof net_gone_shown);
@@ -2010,11 +2015,12 @@ static void net_gone_check(u32 key, double waited_ms) {
     double now = now_ms();
     for (int p = 0; p < net_n && p < RBN_PLAYERS; p++) {
         if (p == net_local) continue;
-        int quiet = !net_gone_after[p] && net_pads_heard_ms[p] > 0 && now - net_pads_heard_ms[p] > NET_GONE_MS;
+        int quiet = !net_gone_after[p] && (net_pads_heard_ms[p] > 0 ? now - net_pads_heard_ms[p] > NET_GONE_MS
+                                                                   : net_fight_t0 > 0 && now - net_fight_t0 > NET_SILENT_MS);
         if (quiet && net_local == 0) {
-            net_gone_mark(p, rbn_remote_newest(p), "nothing came from their game for 8 seconds");
+            net_gone_mark(p, rbn_remote_newest(p), net_pads_heard_ms[p] > 0 ? "nothing came from their game for 8 seconds" : "their game never started this fight");
             net_left_for(p, net_gone_after[p]);
-        } else if (quiet && p == 0) net_all_gone("nothing came from the host for 8 seconds");
+        } else if (quiet && p == 0) net_all_gone(net_pads_heard_ms[0] > 0 ? "nothing came from the host for 8 seconds" : "the host's game never started this fight");
         if (net_gone_after[p] && waited_ms > 3000 && rbn_remote_newest(p) < net_gone_after[p]) {
             fprintf(stderr, "[rb] net mode: player %d's last pads before its cutoff (%u) never came: cut at %u instead\n",
                     p + 1, net_gone_after[p], rbn_remote_newest(p));
@@ -2517,7 +2523,13 @@ HLE_WRAP(71017880c0) {
         /* This game's own player is the human panel its own controller joined (controller slot = this game's
          * player, as controllers_rollback_p<n>.ini puts it), at whichever index: the other slot may be a CPU,
          * added first or after (no keyboard stand-in needed). Its choice goes to the peer. */
-        if (!ch_have_mine && type == 0 && slot == (u32)net_local) {
+        /* (v0.9.3) on a joiner any human panel is its own player - the others never join its select screen. One its
+         * controller joined on another slot (as player 1, before the host's game was up and gave it its number) is held
+         * as a spare: its choice if no panel on its own slot comes by its own panel (it may join again once numbered) */
+        static RbnChoice ch_spare; static int ch_have_spare;
+        if (idx == 0) ch_have_spare = 0;
+        int exact = type == 0 && slot == (u32)net_local, spare = !exact && type == 0 && net_local > 0 && !ch_have_spare;
+        if (!ch_have_mine && (exact || spare)) {
             memset(&ch_mine, 0, sizeof ch_mine);
             ch_mine.player = net_local; ch_mine.chara = ld64(st + 0x88); ch_mine.colour = ld8(st + 0x90);
             tag_mine(st);
@@ -2527,9 +2539,21 @@ HLE_WRAP(71017880c0) {
                 ch_mine.has_stage = 1; ch_mine.hazards = ld8(SEL_HAZ);
                 for (int k = 0; k < 0x20; k++) ch_mine.stage[k] = ld8(sel + (u64)k);
             }
-            ch_have_mine = 1;
-            fprintf(stderr, "[rb] handshake: this game's player %d (panel %d): ui_chara %016llx, colour %d%s (stage entry %u: %016llx, hazards %d)\n", net_local + 1, idx + 1,
-                    (unsigned long long)ch_mine.chara, ch_mine.colour, net_local == 0 ? ", sent with the stage" : "", cur, (unsigned long long)ld64(sel), ld8(SEL_HAZ));
+            if (spare) {
+                ch_spare = ch_mine; ch_have_spare = 1; memset(&ch_mine, 0, sizeof ch_mine);
+                fprintf(stderr, "[rb] handshake: this game's player picked on panel %d with controller slot %d, not %d: its choice unless its own slot's panel comes\n",
+                        idx + 1, (int)slot, net_local);
+            } else {
+                ch_have_mine = 1;
+                fprintf(stderr, "[rb] handshake: this game's player %d (panel %d): ui_chara %016llx, colour %d%s (stage entry %u: %016llx, hazards %d)\n", net_local + 1, idx + 1,
+                        (unsigned long long)ch_mine.chara, ch_mine.colour, net_local == 0 ? ", sent with the stage" : "", cur, (unsigned long long)ld64(sel), ld8(SEL_HAZ));
+                for (int k = 0; k < 3; k++) { net_choice_send(0); Sleep(5); }
+            }
+        }
+        if (idx == net_local && !ch_have_mine && ch_have_spare) {
+            ch_mine = ch_spare; ch_have_mine = 1;
+            fprintf(stderr, "[rb] handshake: this game's player %d: the choice it made on another panel (ui_chara %016llx, colour %d)\n",
+                    net_local + 1, (unsigned long long)ch_mine.chara, ch_mine.colour);
             for (int k = 0; k < 3; k++) { net_choice_send(0); Sleep(5); }
         }
         if (idx == net_local) {   /* this game's own player's slot: its own choice */

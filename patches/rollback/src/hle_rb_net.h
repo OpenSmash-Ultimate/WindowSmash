@@ -36,6 +36,10 @@ void rbn_put_mismatch(uint32_t frame);                 /* (a rollback that could
 uint32_t rbn_confirmed(void);                          /* the newest frame every player's real pad is known for */
 /* may the game run `frame` now? Not when it would put a guess further back than RBN_MAX_BACK */
 int rbn_can_run(uint32_t frame);
+/* (v0.9.2) player p is gone from the fight after frame `after` (the same cutoff on every game: its LEFT, or the host's
+ * word): its pads past it are none, nothing waits for them, and frames already run past it with other pads run again */
+void rbn_gone(int p, uint32_t after, uint32_t ran);   /* (ran: the newest frame this game has run) */
+uint32_t rbn_gone_after(int p);                        /* 0: not gone */
 
 /* ---- the wire (little-endian, lengths checked) ----
  * PADS: type 1 | player u8 | count u8 | runs u8 | first u32 | frame u32 | check_frame u32 | check u32 |

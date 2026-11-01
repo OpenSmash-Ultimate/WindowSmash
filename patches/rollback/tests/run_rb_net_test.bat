@@ -10,6 +10,8 @@ rem (M6: a peer that runs slower for a while: the frame advantage holds the othe
 rem (M7: 3 and 4 players, everything through the host; delays 0, 2, 4; one slow; and 3 players sabotaged)
 for %%n in (3 4) do for %%d in (0 2 4) do "%OUT%" %%d - %%n || exit /b 1
 "%OUT%" 2 slow 3 || exit /b 1
+rem (v0.9.2: a player leaves a 3- or 4-player match; the host cuts it off, and the players left stay the same)
+for %%n in (3 4) do for %%d in (0 2 4) do "%OUT%" %%d leave %%n || exit /b 1
 "%OUT%" 2 norollback 3 >nul && (echo FAIL: the sabotaged 3-player run passed & exit /b 1)
 rem (the test can fail: with rollbacks off it must)
 "%OUT%" 2 norollback >nul && (echo FAIL: the sabotaged run passed & exit /b 1)

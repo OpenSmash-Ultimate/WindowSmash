@@ -121,6 +121,9 @@ doubled sound right at the start of a match that settles by itself.
 - **A player gone from a fight**: when a player's `LEFT` comes, or nothing has come from its game for 8 s, the
   others stop waiting for its inputs, and its character stands still. If this game's fight runs on past the
   other's (a desync, or a closed game), a message box says so. Before this, a game waited up to 10 minutes.
+  Every game must cut the player off at the same frame, so with 3-4 players only the host times a joiner out: it
+  sends a `LEFT` for it with the newest frame it has, and the games past that frame roll back to it (`rbn_gone`).
+  A joiner only times out the host, which ends the match for it. `rb_net_test <delay> leave <3|4>` checks this.
 - **Input delay** is chosen from the measured round trip (e.g. delay 2 at about 70 ms).
 - **Frame-advantage sync**: a game that runs ahead of the others holds for part of a refresh (a dropped
   vsync), decided every 8 frames from each player's samples, so no one drifts into constant rollbacks.

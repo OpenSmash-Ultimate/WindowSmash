@@ -51,6 +51,12 @@ static Peer peers[TP];
 static int np = 2;     /* (players) */
 static int sabotage;   /* (argv[2] "norollback": wrong guesses kept, the test must FAIL) */
 static int slow;       /* (argv[2] "slow", M6: B misses one tick in 6 for the first half, as a PC at ~20 ms a frame) */
+/* (argv[2] "leave", v0.9.2: the last player stops at LEAVE_T; the host, LEAVE_QUIET ticks without its pads, cuts it off
+ * at the newest it has and tells the others (a LEFT 1..6 ticks on); those left must stay the same as each other) */
+#define LEAVE_T 2000
+#define LEAVE_QUIET 60
+static int leave, left_cut, left_heard_t;
+static int left_told_at[TP];
 static long long msg_bytes, msg_pads, msgs;   /* (M6: PADS sizes, runs against 20 bytes a pad) */
 static size_t net_size;
 
@@ -90,6 +96,17 @@ static void tick(Peer *p, int t) {
         /* (each side's advantage as each measures it, late alike: the difference cancels the trip) */
         rbn_sync_sample(j, (int32_t)p->cur - (int32_t)(p->heard[j] + 2), (int32_t)m.frame - (int32_t)(m.heard[p->who] + 2));
     }
+    /* (leave: the host gives up on the last player once it has been quiet; the others hear so a little later) */
+    int lp = np - 1;
+    if (leave && p->who == 0 && !left_cut) {
+        if (rbn_remote_newest(lp) > (uint32_t)left_heard_t) { left_heard_t = (int)rbn_remote_newest(lp); left_told_at[0] = t; }
+        else if (t >= LEAVE_T && t - left_told_at[0] > LEAVE_QUIET) {
+            left_cut = (int)rbn_remote_newest(lp); rbn_gone(lp, (uint32_t)left_cut, p->cur);
+            for (int k = 1; k < lp; k++) left_told_at[k] = t + 1 + (int)(rnd() % 6);
+        }
+    } else if (leave && left_cut && p->who != 0 && p->who != lp && left_told_at[p->who] && t >= left_told_at[p->who]) {
+        rbn_gone(lp, (uint32_t)left_cut, p->cur); left_told_at[p->who] = 0;
+    }
     /* a wrong guess: back to before it, run again */
     uint32_t m = rbn_take_mismatch();
     if (m && m <= p->cur && !sabotage) {
@@ -115,14 +132,15 @@ static void tick(Peer *p, int t) {
     while (p->final_n < c) { p->final_n++; p->final[p->final_n] = p->state[p->final_n & (RBN_RING - 1)]; }
     for (int j = 0; j < np; j++)
         for (uint32_t f = 1; f <= p->final_n; f++)
-            if (p->has_check[j][f]) { p->checks++; if ((uint32_t)p->final[f] != p->peer_check[j][f]) p->desyncs++; p->has_check[j][f] = 0; }
+            if (p->has_check[j][f] && rbn_gone_after(j) && f > rbn_gone_after(j)) p->has_check[j][f] = 0;   /* (past a gone player's cutoff) */
+            else if (p->has_check[j][f]) { p->checks++; if ((uint32_t)p->final[f] != p->peer_check[j][f]) p->desyncs++; p->has_check[j][f] = 0; }
     /* our pads some player hasn't got (from the oldest any lacks, every time: messages get lost), our frame, what we
      * have of each, and our hash */
     static RbnMsg out;
     memset(&out, 0, sizeof out);
     out.type = RBN_MSG_PADS; out.player = p->who;
     uint32_t low = ~0u;
-    for (int j = 0; j < np; j++) if (j != p->who && p->acked_by[j] < low) low = p->acked_by[j];
+    for (int j = 0; j < np; j++) if (j != p->who && p->acked_by[j] < low && !rbn_gone_after(j)) low = p->acked_by[j];
     out.first = low + 1;
     for (uint32_t f = out.first; f <= rbn_local_newest() && out.count < RBN_MAX_PADS; f++) rbn_local_get(f, &out.pads[out.count++]);
     for (int j = 0; j < np; j++) if (j != p->who) { out.ack[j] = rbn_remote_newest(j); out.heard[j] = p->heard[j]; }
@@ -220,8 +238,10 @@ int main(int argc, char **argv) {
     }
     sabotage = argc > 2 && !strcmp(argv[2], "norollback");
     slow = argc > 2 && !strcmp(argv[2], "slow");
+    leave = argc > 2 && !strcmp(argv[2], "leave");
     np = argc > 3 ? atoi(argv[3]) : 2;
     if (np < 2 || np > TP) { fprintf(stderr, "FAIL: 2 to %d players\n", TP); return 1; }
+    if (leave && np < 3) { fprintf(stderr, "FAIL: leave needs 3 or 4 players%c", 10); return 1; }
     rbn_state(&net_size);
     for (int i = 0; i < np; i++) {
         peers[i].who = i; peers[i].start = 7 * i;   /* (each starts 7 ticks after the one before: the frame advantage evens it out) */
@@ -229,7 +249,16 @@ int main(int argc, char **argv) {
         rbn_reset(np, i, d); rbn_sync_reset(); keep(&peers[i]);
     }
     for (int t = 0; t < TICKS; t++)
-        for (int i = 0; i < np; i++) if (t >= peers[i].start && !(slow && i == 1 && t < TICKS / 2 && t % 6 == 0)) tick(&peers[i], t);
+        for (int i = 0; i < np; i++) if (t >= peers[i].start && !(slow && i == 1 && t < TICKS / 2 && t % 6 == 0) && !(leave && i == np - 1 && t >= LEAVE_T)) tick(&peers[i], t);
+    int stay = leave ? np - 1 : np;   /* (the players compared: not one that left) */
+    if (leave) {
+        if (!left_cut) { fprintf(stderr, "FAIL: the host never gave up on the player that left%c", 10); return 1; }
+        Peer *lv = &peers[np - 1];
+        use(lv);   /* (its pads sent ahead of the frames it ran, by the input delay: the others played them) */
+        for (uint32_t f = lv->cur + 1; f <= (uint32_t)left_cut; f++) rbn_local_get(f, &lv->used_local[f]);
+        for (uint32_t f = (uint32_t)left_cut + 1; f <= FRAMES; f++) memset(&lv->used_local[f], 0, sizeof(RbnPad));   /* (none past the cutoff) */
+        printf("leave: the last player stopped at tick %d, cut off after frame %d%c", LEAVE_T, left_cut, 10);
+    }
     /* a run with every pad known */
     static uint64_t ideal[FRAMES + 1];
     uint64_t s = 0x1234;
@@ -239,18 +268,18 @@ int main(int argc, char **argv) {
     }
     int ok = 1;
     uint32_t n = ~0u;
-    for (int i = 0; i < np; i++) if (peers[i].final_n < n) n = peers[i].final_n;
+    for (int i = 0; i < stay; i++) if (peers[i].final_n < n) n = peers[i].final_n;
     for (uint32_t f = 1; f <= n && ok; f++)
-        for (int i = 0; i < np; i++)
+        for (int i = 0; i < stay; i++)
             if (peers[i].final[f] != ideal[f]) { fprintf(stderr, "FAIL: frame %u differs at peer %c\n", f, 'A' + i); ok = 0; break; }
     for (int i = 0; i < np; i++) {
         Peer *p = &peers[i];
         printf("peer %c: ran to %u, %u confirmed; %ld rollbacks (%ld frames again, deepest %ld), %ld waits, %ld stalls; %ld hashes checked, %ld differ%s\n",
                'A' + i, p->cur, p->final_n, p->rollbacks, p->rerun, p->max_back, p->waits, p->stalls, p->checks, p->desyncs, i == 0 && np > 2 ? " (the host)" : "");
-        if (p->max_back > RBN_MAX_BACK || p->desyncs || p->final_n < FRAMES - 64) ok = 0;
+        if (i < stay && (p->max_back > RBN_MAX_BACK || p->desyncs || p->final_n < FRAMES - 64)) ok = 0;
     }
     if (msgs) printf("messages: %lld, %.1f pads and %.1f bytes each on average (%.1f without runs)\n", msgs, (double)msg_pads / msgs,
                      (double)msg_bytes / msgs, RBN_HEAD + (double)msg_pads / msgs * RBN_PAD_BYTES);
-    printf("delay %d%s, %d players: %u frames compared with the run with all pads known: %s\n", d, slow ? " (B slow)" : "", np, n, ok ? "PASS" : "FAIL");
+    printf("delay %d%s%s, %d players: %u frames compared with the run with all pads known: %s\n", d, slow ? " (B slow)" : "", leave ? " (the last one leaves)" : "", np, n, ok ? "PASS" : "FAIL");
     return ok ? 0 : 1;
 }

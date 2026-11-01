@@ -10,6 +10,7 @@ typedef struct Remote {
     RbnPad pad[RBN_RING]; uint32_t at[RBN_RING];       /* real pads received */
     RbnPad guess[RBN_RING]; uint32_t guess_at[RBN_RING];   /* the guess a frame ran on, until its real pad comes */
     uint32_t newest;                                   /* every frame up to this one received */
+    uint32_t gone;                                     /* (v0.9.2) gone from the fight after this frame: none from then on, 0: here */
 } Remote;
 #define SAMPLES 32
 /* everything a session keeps, in one place (rbn_state: the test runs two sessions in one process) */
@@ -76,6 +77,7 @@ void rbn_remote(int p, uint32_t frame, RbnPad pad) {
     Remote *r = &remote[p];
     if (frame + RBN_RING <= r->newest + 1 || frame > r->newest + RBN_RING) return;   /* outside the ring */
     if (r->at[frame & MASK] == frame) return;   /* (sent again: it already came) */
+    if (r->gone && frame > r->gone) return;    /* (past its cutoff: none, on every game alike) */
     pad = rbn_rest(pad);
     r->pad[frame & MASK] = pad; r->at[frame & MASK] = frame;
     while (r->at[(r->newest + 1) & MASK] == r->newest + 1) r->newest++;
@@ -92,6 +94,7 @@ RbnPad rbn_get(int p, uint32_t frame, int *guessed) {
     if (p < 0 || p >= nplayers || !frame) return none;
     if (p == local_player) { RbnPad out = none; rbn_local_get(frame, &out); return out; }
     Remote *r = &remote[p];
+    if (r->gone && frame > r->gone) return none;
     if (r->at[frame & MASK] == frame) return r->pad[frame & MASK];
     /* not here yet: the newest real pad before it, held (a re-run of the frame guesses again, maybe better) */
     RbnPad g = none;
@@ -104,15 +107,33 @@ RbnPad rbn_get(int p, uint32_t frame, int *guessed) {
 uint32_t rbn_take_mismatch(void) { uint32_t m = mismatch; mismatch = 0; return m; }
 void rbn_put_mismatch(uint32_t m) { if (m && (!mismatch || m < mismatch)) mismatch = m; }
 
+/* (a gone player's pads are all known once its real ones up to the cutoff came: none after it) */
+static uint32_t known_up_to(int p) { return remote[p].gone && remote[p].newest >= remote[p].gone ? 0xFFFFFFF0u : remote[p].newest; }
 uint32_t rbn_confirmed(void) {
     uint32_t c = local_newest;
-    for (int p = 0; p < nplayers; p++) if (p != local_player && remote[p].newest < c) c = remote[p].newest;
+    for (int p = 0; p < nplayers; p++) if (p != local_player && known_up_to(p) < c) c = known_up_to(p);
     return c;
 }
 int rbn_can_run(uint32_t frame) {
-    for (int p = 0; p < nplayers; p++) if (p != local_player && frame > remote[p].newest + RBN_MAX_BACK) return 0;
+    for (int p = 0; p < nplayers; p++) if (p != local_player && frame > known_up_to(p) + RBN_MAX_BACK) return 0;
     return 1;
 }
+void rbn_gone(int p, uint32_t after, uint32_t ran) {
+    if (p < 0 || p >= nplayers || p == local_player || !after) return;
+    Remote *r = &remote[p];
+    if (r->gone && r->gone <= after) return;   /* (the earliest cutoff heard holds) */
+    r->gone = after;
+    /* frames past the cutoff this game already ran (up to `ran`) on a guess, or on a real pad that came before it
+     * left, other than none: run again */
+    static const RbnPad none;
+    for (uint32_t f = after + 1; f <= ran && f < after + RBN_RING; f++) {
+        int other = 0;
+        if (r->guess_at[f & MASK] == f) { other = !rbn_same(&r->guess[f & MASK], &none); r->guess_at[f & MASK] = 0; }
+        else if (r->at[f & MASK] == f) other = !rbn_same(&r->pad[f & MASK], &none);
+        if (other && (!mismatch || f < mismatch)) mismatch = f;
+    }
+}
+uint32_t rbn_gone_after(int p) { return p >= 0 && p < nplayers ? remote[p].gone : 0; }
 
 /* ---- the wire ---- */
 static void put16(uint8_t *p, uint16_t v) { p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); }
@@ -283,7 +304,7 @@ int rbn_sync_wait(uint32_t frame) {
     if (frame % 8 == 0 && !owed) {
         int w = 0, ready = 1, any = 0;
         for (int p = 0; p < nplayers; p++) {
-            if (p == local_player) continue;
+            if (p == local_player || remote[p].gone) continue;   /* (gone: no samples come) */
             if (ndiff[p] < 4) { ready = 0; break; }
             int64_t sum = 0;
             for (int i = 0; i < ndiff[p]; i++) sum += diff[p][i];

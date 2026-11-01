@@ -161,8 +161,8 @@ int main(int argc, char **argv) {
         uint8_t old[16] = {RBN_MSG_HELLO, 0, 1, 0};
         if (!rbn_hello_parse(old, sizeof old, &g) || g.version != 1) { fprintf(stderr, "FAIL: a version 1 HELLO not told apart\n"); return 1; }
     }
-    {   /* the delay from the round trip: 1 on a home network, one more each 50 ms, at most 5 */
-        static const struct { double rtt; int d; } k[] = {{0, 1}, {3, 1}, {49.9, 1}, {50, 2}, {99, 2}, {120, 3}, {180, 4}, {240, 5}, {900, 5}, {-1, 1}};
+    {   /* the delay from the round trip: 1 on a home network, one more each 30 ms, at most 5 */
+        static const struct { double rtt; int d; } k[] = {{0, 1}, {3, 1}, {29.9, 1}, {30, 2}, {46, 2}, {59.9, 2}, {60, 3}, {90, 4}, {120, 5}, {900, 5}, {-1, 1}};
         for (unsigned i = 0; i < sizeof k / sizeof *k; i++)
             if (rbn_delay_for_rtt(k[i].rtt) != k[i].d) { fprintf(stderr, "FAIL: delay for %.1f ms is %d, not %d\n", k[i].rtt, rbn_delay_for_rtt(k[i].rtt), k[i].d); return 1; }
     }

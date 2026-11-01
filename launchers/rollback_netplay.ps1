@@ -73,7 +73,7 @@ $form.Text = "Smash rollback netplay"
 $form.ClientSize = New-Object Drawing.Size(460, 330)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = "FixedDialog"; $form.MaximizeBox = $false
-$form.TopMost = $true   # (stays in front of the game's window, which opens over it, until closed: the host needs its addresses)
+$form.TopMost = $true   # (in front of the game's window, which opens over it: the host needs its addresses; off 3 s after that window is up)
 $form.Font = $font
 
 function New-Label($text, $x, $y, $w = 420, $h = 28) {
@@ -168,18 +168,23 @@ $timer.Add_Tick({
 foreach ($l in $hostStatus, $joinStatus) { $l.Font = New-Object Drawing.Font($form.Font.FontFamily, 11, [Drawing.FontStyle]::Bold); $l.ForeColor = [Drawing.Color]::DarkBlue }
 $statusFile = Join-Path $root "build\rollback_status.txt"
 $statusTimer = New-Object Windows.Forms.Timer; $statusTimer.Interval = 500
+# in front of the game once, without staying on top (Windows lets a window take the front only this way from behind)
+function Bring-Front { $form.TopMost = $true; $form.Activate(); $form.TopMost = $false }
 $statusTimer.Add_Tick({
     $t = ""; try { if (Test-Path $statusFile) { $t = ([IO.File]::ReadAllText($statusFile)).Trim() } } catch {}
     $hostStatus.Text = $t; $joinStatus.Text = $t
     # (the game gone for 3 s, or never started: this window really closes)
-    if (Get-Process ssbu_rollback -ErrorAction SilentlyContinue) { $script:seen = $true; $script:gone = 0 }
+    $g = @(Get-Process ssbu_rollback -ErrorAction SilentlyContinue)
     elseif ((++$script:gone -ge 6 -and $script:seen) -or $script:gone -ge 120) { $script:quit = $true; $statusTimer.Stop(); $form.Close(); return }
-    # (Close only hid it: back on top when the game starts waiting)
-    if ($t -and $t -ne $script:said -and -not $form.Visible) { $form.Show(); $form.WindowState = "Normal"; $form.TopMost = $true; $form.Activate() }
+    # (comes to the front when the game starts waiting, hidden or not; hides again when the wait ends: the match goes on)
+    if ($t -and -not $script:said) { $form.Show(); $form.WindowState = "Normal"; Bring-Front }
+    elseif (-not $t -and $script:said) { $form.Hide() }
     $script:said = $t
+    # (on top only while the game's window opens over this one: then it may lose focus like any window)
+    if ($form.TopMost -and $script:winUp -and ++$script:ontop -ge 6) { $form.TopMost = $false; Bring-Front }
 })
 # once a game is started, Close (and the X) hide the window instead: it must be there when the game waits
-$script:started = $false; $script:quit = $false; $script:seen = $false; $script:gone = 0; $script:said = ""
+$script:started = $false; $script:quit = $false; $script:seen = $false; $script:gone = 0; $script:said = ""; $script:ontop = 0; $script:winUp = $false
 $form.Add_FormClosing({ param($s, $e) if ($script:started -and -not $script:quit -and $e.CloseReason -eq "UserClosing") { $e.Cancel = $true; $form.Hide() } })
 function Start-Status { try { Remove-Item $statusFile -ErrorAction SilentlyContinue } catch {}; $script:started = $true; $statusTimer.Start() }
 $hostGo.Add_Click({

@@ -128,12 +128,16 @@ extern double rb_save_ms[3];
 extern double rb_save_parts[4]; extern long long rb_save_count;   /* (hle_rb_state.c: parking, GPU drain, memory, in all) */
 void profile_start_gated(double seconds);
 static void tape_clear(void);
+static void tag_restore(const char *why);
 static void safe_point(Cpu *c, uintptr_t sp) {
     S.points++;
     int on = fight_on();
     if (!on) {
         if (S.in_fight) {
             summary("fight over"); S.in_fight = 0;
+            /* (the other players' name tags out of this PC's list now: the game saves its list as the results come,
+             * and a slot put back only after them had been saved with the friend's tag in it - gc2: 3 copies) */
+            tag_restore("the fight is over");
             /* A catch-up still running when the fight ended (a rollback at the last KO): its mode - presentation
              * work left out, the vsync thread unpaced - was only switched off at fight safe points, so it stayed on
              * through the results screen, which crashed in the job system (stress3, twopc13: main+0x35c4580, both
@@ -917,6 +921,10 @@ static u32 net_remote_low(void) {
  * player 1's game adds the stage; applied at the player record builder (HLE_WRAP 0x71017880c0). */
 static RbnChoice ch_mine, ch_peer[RBN_PLAYERS];
 static int ch_have_mine, ch_have_peer[RBN_PLAYERS];
+/* (hle_hid.c, version 12) the other PC's player's controller here: a GameCube controller if its game said so in its choice
+ * (its analog triggers - light shield - and the GameCube controls, as on its own PC), else a Pro Controller */
+int rb_slot_remote_gc(u32 id) { return id < RBN_PLAYERS && ch_have_peer[id] && ch_peer[id].gc; }
+int hid_slot_is_gc(u32 id);   /* (hle_hid.c) this PC's slot plays a GameCube controller now */
 static void net_choice_send(int ask);
 static int net_choice_take(const u8 *buf, int len);
 static int net_rules_take(const u8 *buf, int len);
@@ -1468,8 +1476,8 @@ static int net_choice_take(const u8 *buf, int len) {
     if (net_local == 0) for (int k = 1; k < net_n; k++) if (k != c.player) rbl_send_to(k, buf, len);   /* (the host passes it on: M7) */
     RbnChoice cmp = c; cmp.ask = 0;
     if (!ch_have_peer[c.player] || memcmp(&cmp, &ch_peer[c.player], sizeof cmp))
-        fprintf(stderr, "[rb] handshake: player %d's choice came: ui_chara %016llx, colour %d%s\n", c.player + 1, (unsigned long long)c.chara, c.colour,
-                c.has_stage ? ", and the stage" : "");
+        fprintf(stderr, "[rb] handshake: player %d's choice came: ui_chara %016llx, colour %d%s%s\n", c.player + 1, (unsigned long long)c.chara, c.colour,
+                c.has_stage ? ", and the stage" : "", c.gc ? " (a GameCube controller: its slot is one here too)" : "");
     int ask = c.ask;
     c.ask = 0;
     ch_peer[c.player] = c; ch_have_peer[c.player] = 1;
@@ -2348,6 +2356,8 @@ HLE_WRAP(71017880c0) {
             memset(&ch_mine, 0, sizeof ch_mine);
             ch_mine.player = net_local; ch_mine.chara = ld64(st + 0x88); ch_mine.colour = ld8(st + 0x90);
             tag_mine(st);
+            ch_mine.gc = hid_slot_is_gc((u32)net_local);
+            if (ch_mine.gc) fprintf(stderr, "[rb] handshake: this game's player plays a GameCube controller: its slot is one on every PC\n");
             if (net_local == 0) {
                 ch_mine.has_stage = 1; ch_mine.hazards = ld8(SEL_HAZ);
                 for (int k = 0; k < 0x20; k++) ch_mine.stage[k] = ld8(sel + (u64)k);
@@ -2387,7 +2397,9 @@ HLE_WRAP(71017880c0) {
             if (idx == net_local) tag_given[idx] = ch_have_mine && ch_mine.has_tag ? tag_mine_slot : 0;
             else if (ch_have_peer[idx] && ch_peer[idx].has_tag) tag_given[idx] = tag_place(ch_peer[idx].tag, idx);
         }
-        st32(st + 0x78, 0); st32(st + 0x210, (u32)idx); st8(st + 0x450, 0);
+        /* (+ 0x450: 1 for a human's panel, 0 for a CPU's - tag research, 10-31; the PR's 0 for everyone left every
+         * player on the default controls, the tag's own never applied: R jumped nowhere, gc1) */
+        st32(st + 0x78, 0); st32(st + 0x210, (u32)idx); st8(st + 0x450, 1);
         st8(st + 0x454, 0); st8(st + 0x455, 0); st32(st + 0x214, tag_given[idx]);
     }
     f_71017880c0_orig(c);

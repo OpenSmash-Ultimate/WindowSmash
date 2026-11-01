@@ -137,7 +137,12 @@ Every game must start the fight from the same state:
   sends its player's tag (the head of its save slot: name and controls, 0x60 bytes). The others write it into a
   free slot of their own tag list (0xF7D8-byte slots; the game keeps two copies in memory, found by searching) for
   the match, point that player's panel at it (panel + 0x214 = slot + 1), and put the slot back once the results
-  are over.
+  are over. They go back when the fight ends: the game saves its tag list as the results come.
+- **Controllers (version 12)**: a GameCube controller plays as one on every PC (`style = auto` in
+  `controllers_rollback_p1.ini`; `CHOICE` says so), so its analog triggers (light shield) and the GameCube controls
+  agree everywhere; every other pad plays as a Pro Controller. The rollback `hle_hid.c` also writes a GameCube
+  state's triggers at +36/+40 (upstream writes +40/+44, which the game reads as the wrong trigger): every PC must
+  write them alike. Every panel is built as a human's (+0x450 = 1; the PR's 0 left everyone on default controls).
 - **The rules (`RULES`)**: at the match set-up the host reads the game's rule header (0x588 bytes; bytes
   0–1, the mode, kept), the stage set-up's inputs (its seed and history: without the history, stages with
   variations desync) and each panel's rule kind and stock count, and sends them as a 0x5ee-byte blob. Joining

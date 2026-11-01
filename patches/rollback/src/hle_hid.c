@@ -26,6 +26,7 @@ static volatile LONG64 sampling;
  * nothing connected is never read, so its moves never reached the game. The keyboard sat there for
  * that alone, and could not play this PC's own player.) */
 int rb_slot_remote(u32 id);
+int rb_slot_remote_gc(u32 id);   /* (version 12: a remote player's GameCube controller, from its choice) */
 /* (Host/Join: which of this PC's own controller slots the game's slot `id` reads. A joining PC's controller and keyboard
  * are its player 1, as on any PC; once the host gives the game player N, the game's slot N reads them: hle_rb_core.c) */
 u32 rb_slot_phys(u32 id);
@@ -43,11 +44,12 @@ static int pad_connected(u32 id) {
 
 /* The player's style: a GameCube controller while its pad plays as one, else a Pro Controller. */
 static u32 pad_style(u32 id) {
-    if (rb_slot_remote(id)) return STYLE_FULLKEY;   /* (as on the other PC: style = pro) */
+    if (rb_slot_remote(id)) return rb_slot_remote_gc(id) ? STYLE_GC : STYLE_FULLKEY;   /* (as on the other PC) */
     if (!pad_connected(id)) return 0;
     PadState p;
     return pad_get(rb_slot_phys(id), &p) && p.gc ? STYLE_GC : STYLE_FULLKEY;
 }
+int hid_slot_is_gc(u32 id) { return pad_style(id) == STYLE_GC; }   /* (hle_rb_core.c: this player's choice says so) */
 
 static const char *const BUTTON_NAMES[] = {"A", "B", "X", "Y", "LSTICK", "RSTICK", "L", "R", "ZL", "ZR", "PLUS", "MINUS",
                                            "LEFT", "UP", "RIGHT", "DOWN"};
@@ -119,9 +121,10 @@ static u64 keyboard_buttons(i32 *lx, i32 *ly, i32 *rx, i32 *ry) {
 }
 
 /* State shared by every style: { s64 sampling; u64 buttons; s32 lx, ly; s32 rx, ry; u32 attributes; u32 reserved }.
- * The attributes say connected only in the player's own style. A GameCube state goes on with
- * { u32 trigger l, trigger r (0..32767); u32 reserved }: the game presses L and R itself when a
- * trigger is past 0x27FF, whatever the buttons say, so the keyboard's L and R pull them fully. */
+ * The attributes say connected only in the player's own style. A GameCube state has its triggers
+ * where the others have their padding: { ...; u32 attributes; u32 trigger l, trigger r (0..32767);
+ * u32 reserved }: the game presses L and R itself when a trigger is past 0x27FF, whatever the
+ * buttons say, so the keyboard's L and R pull them fully. */
 /* (rollback build: hle_rb_core.c) In a fight a player's input comes from the input tape, by
  * logic frame, and the sampling number follows the logic frame. */
 void rb_pad(u32 id, u64 *buttons, i32 *lx, i32 *ly, i32 *rx, i32 *ry, i32 *lt, i32 *rt);
@@ -162,13 +165,12 @@ static void npad_state(u64 out, u32 id, u32 style) {
     st32(out + 16, (u32)lx); st32(out + 20, (u32)ly);
     st32(out + 24, (u32)rx); st32(out + 28, (u32)ry);
     st32(out + 32, attributes);
-    st32(out + 36, 0);
     if (style == STYLE_GC) {
         if (buttons & 1ull << B_L) lt = 32767;
         if (buttons & 1ull << B_R) rt = 32767;
-        st32(out + 40, (u32)lt); st32(out + 44, (u32)rt);
-        st32(out + 48, 0);
-    }
+        st32(out + 36, (u32)lt); st32(out + 40, (u32)rt);
+        st32(out + 44, 0);
+    } else st32(out + 36, 0);
 }
 
 HLE(_ZN2nn3hid12GetNpadStateEPNS0_16NpadFullKeyStateERKj) { npad_state(c->x[0], ld32(c->x[1]), STYLE_FULLKEY); }

@@ -172,12 +172,12 @@ int main(int argc, char **argv) {
         uint8_t b[RBN_CHOICE_BYTES];
         size_t n = rbn_choice_build(b, sizeof b, &c);
         if (n != RBN_CHOICE_BYTES || !rbn_choice_parse(b, n, &d) || d.player != 0 || d.colour != 3 || !d.has_stage || d.hazards != 1 ||
-            d.chara != c.chara || memcmp(d.stage, c.stage, 0x20) || d.has_tag || rbn_choice_parse(b, n - 1, &d)) { fprintf(stderr, "FAIL: CHOICE round trip%c", 10); return 1; }
+            d.chara != c.chara || memcmp(d.stage, c.stage, 0x20) || d.has_tag || d.gc || rbn_choice_parse(b, n - 1, &d)) { fprintf(stderr, "FAIL: CHOICE round trip%c", 10); return 1; }
         /* with a name tag: its 0x60 bytes come through, the other flags kept */
-        c.has_tag = 1; c.ask = 1;
+        c.has_tag = 1; c.ask = 1; c.gc = 1;
         for (int k = 0; k < RBN_TAG_BYTES; k++) c.tag[k] = (uint8_t)(k * 13 + 1);
         n = rbn_choice_build(b, sizeof b, &c);
-        if (n != RBN_CHOICE_BYTES || !rbn_choice_parse(b, n, &d) || !d.has_tag || !d.ask || !d.has_stage || memcmp(d.tag, c.tag, RBN_TAG_BYTES))
+        if (n != RBN_CHOICE_BYTES || !rbn_choice_parse(b, n, &d) || !d.has_tag || !d.ask || !d.has_stage || !d.gc || memcmp(d.tag, c.tag, RBN_TAG_BYTES))
             { fprintf(stderr, "FAIL: CHOICE with a name tag%c", 10); return 1; }
     }
     {   /* RULES (streamlining 2): a chunk built and parsed back the same; an ask with no data; a chunk past the blob,

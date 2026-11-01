@@ -73,9 +73,10 @@ int rbn_parse(const uint8_t *buf, size_t len, RbnMsg *m);       /* 1: a valid me
  * no seed until it has chosen, so player 2 takes both at once). */
 enum { RBN_MSG_HELLO = 2 };
 #define RBN_HELLO_BYTES 40
-#define RBN_VERSION 11  /* (3: PADS in runs; 4: a frame hash final once its own pads are real; M6. 5: an ack and a frame heard per player;
+#define RBN_VERSION 12  /* (3: PADS in runs; 4: a frame hash final once its own pads are real; M6. 5: an ack and a frame heard per player;
                             * 6: Host/Join, a joiner's number from the host; M7. 7: RULES. 8: READY. 9: MENU. 10: the name tag in CHOICE.
-                            * 11: no + in fights (no pause menu online): every game must take it out alike) */
+                            * 11: no + in fights (no pause menu online): every game must take it out alike.
+                            * 12: a GameCube controller in CHOICE: its slot one on every PC, analog triggers and its controls) */
 /* (M7: players, byte 5: how many play, from the host; 0 from the others.
  * Host/Join, version 6: a joining game has no number yet: player -1 (0xFF on the wire), and its seed field carries a
  * random join id instead, so the host tells two joiners from one address apart and knows one that comes back. The
@@ -88,14 +89,14 @@ int rbn_delay_for_rtt(double rtt_ms);
 int rbn_hello_parse(const uint8_t *buf, size_t len, RbnHello *h);
 
 /* CHOICE, the match's set-up: a player's own fighter and colour, from the game that plays it; player 1's
- * game adds the stage. type 3 | player u8 | colour u8 | flags u8 (1: stage, 2: answer, 4: name tag) | hazards u8 | 0 u8 x3 |
+ * game adds the stage. type 3 | player u8 | colour u8 | flags u8 (1: stage, 2: answer, 4: name tag, 8: a GameCube controller) | hazards u8 | 0 u8 x3 |
  * chara u64 (ui_chara hash) | stage 0x20 bytes (the stage choice entry) | tag 0x60 bytes (the head of the player's
  * name-tag slot: used, name hash, length, the name, its controls; zeros without one) (144 bytes). */
 enum { RBN_MSG_CHOICE = 3 };
 #define RBN_TAG_BYTES 0x60
 #define RBN_CHOICE_BYTES (48 + RBN_TAG_BYTES)
 typedef struct RbnChoice { int player, colour, has_stage, hazards; uint64_t chara; uint8_t stage[0x20]; int ask;   /* ask (flags 2): answer with yours */
-                           int has_tag; uint8_t tag[RBN_TAG_BYTES]; } RbnChoice;
+                           int has_tag; uint8_t tag[RBN_TAG_BYTES]; int gc; } RbnChoice;   /* gc (flags 8): the player plays a GameCube controller */
 size_t rbn_choice_build(uint8_t *buf, size_t cap, const RbnChoice *c);
 /* RULES (streamlining, item 2): the host's rules for the match - the game's rule header, the stage set-up's inputs, the
  * rule kind and stocks - a blob of `total` bytes, sent in chunks of RBN_RULES_CHUNK (one UDP packet each, the whole

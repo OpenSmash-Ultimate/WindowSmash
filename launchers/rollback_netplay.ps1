@@ -97,7 +97,10 @@ $choose.Controls.Add((New-Label "Host: your PC runs the match and the others con
 $hostPage = New-Object Windows.Forms.Panel; $hostPage.Dock = "Fill"
 $hostPage.Controls.Add((New-Label "How many players, you included?" 20 20))
 $count = New-Object Windows.Forms.ComboBox; $count.DropDownStyle = "DropDownList"; $count.Location = New-Object Drawing.Point(20, 55); $count.Width = 100
-[void]$count.Items.AddRange(@("2", "3", "4")); $count.SelectedIndex = 1
+[void]$count.Items.AddRange(@("2", "3", "4")); $count.SelectedIndex = 0
+# (the last count hosted, remembered in build\rollback_last_players.txt; 2 the first time)
+$playersFile = Join-Path $root "build\rollback_last_players.txt"
+try { if (Test-Path $playersFile) { $k = $count.Items.IndexOf(([IO.File]::ReadAllText($playersFile)).Trim()); if ($k -ge 0) { $count.SelectedIndex = $k } } } catch {}
 $hostGo = New-Button "Start hosting" 20 100 200 50; $hostGo.Font = $big
 $hostBack = New-Button "Back" 340 270 100 40
 $hostPage.Controls.AddRange(@($count, $hostGo, $hostBack))
@@ -194,7 +197,7 @@ $script:started = $false; $script:quit = $false; $script:seen = $false; $script:
 $form.Add_FormClosing({ param($s, $e) if ($script:started -and -not $script:quit -and $e.CloseReason -eq "UserClosing") { $e.Cancel = $true; $form.Hide() } })
 function Start-Status { try { Remove-Item $statusFile -ErrorAction SilentlyContinue } catch {}; $script:started = $true; $statusTimer.Start() }
 $hostGo.Add_Click({
-    try { Start-Status; Start-Rollback "host" $count.SelectedItem | Out-Null; Show-Page $addrPage; $timer.Start() } catch { Fail $_.Exception.Message }
+    try { try { Set-Content -Encoding ascii $playersFile $count.SelectedItem } catch {}; Start-Status; Start-Rollback "host" $count.SelectedItem | Out-Null; Show-Page $addrPage; $timer.Start() } catch { Fail $_.Exception.Message }
 })
 $joinGo.Add_Click({
     $a = $addr.Text.Trim()

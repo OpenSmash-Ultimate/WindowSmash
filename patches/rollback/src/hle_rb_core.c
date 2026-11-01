@@ -763,6 +763,28 @@ int rbl_recv(void *buf, int cap);
 void rbl_stats(long long *s, long long *r, long long *e);
 int rbl_accept(int p);
 int rbl_has_peer(int p);
+/* While a set-up waits for the other games the main thread draws nothing, so the game looks frozen: say what it
+ * waits for (the game window's title, and build\rollback_status.txt, which the Host/Join window shows, on top) and
+ * keep the freeze watchdog quiet (a known wait, not a hang). NULL: the wait is over. */
+void watchdog_present(void);    /* debug_watchdog.c */
+void gfx_set_status(const char *text);   /* gpu_d3d11.c */
+static void net_wait_say(const char *what) {
+    static double last; static int shown;
+    double t = now_ms();
+    if (what) watchdog_present();
+    if (what && t - last < 500) return;
+    if (!what && !shown) return;
+    last = t; shown = what != NULL;
+    char s[160] = "";
+    if (what && net_local == 0) {
+        int k = 1;
+        for (int p = 1; p < net_n; p++) k += rbl_has_peer(p) ? 1 : 0;
+        snprintf(s, sizeof s, "%s (%d of %d players here)", what, k, net_n);
+    } else if (what) snprintf(s, sizeof s, "%s", what);
+    gfx_set_status(s);
+    FILE *f = fopen("build\rollback_status.txt", "w");
+    if (f) { fputs(s, f); fclose(f); }
+}
 int rbl_who(void);
 void rbl_assign(int p);
 long long rbl_dropped(void);
@@ -1512,7 +1534,8 @@ static void net_rules_setup(u64 st) {
     if (!rules_have) {
         fprintf(stderr, "[rb] handshake: waiting for the host's rules\n");
         double t0 = now_ms();
-        while (!rules_have && now_ms() - t0 < 600000) { net_hello(1); net_rules_send(1); Sleep(16); }   /* (ours asks for them) */
+        while (!rules_have && now_ms() - t0 < 600000) { net_hello(1); net_rules_send(1); net_wait_say("Waiting for the host's rules..."); Sleep(16); }   /* (ours asks for them) */
+        net_wait_say(NULL);
     }
     if (!rules_have) { fprintf(stderr, "[rb] handshake: no rules from the host after 10 min: this game's own (the match may differ)\n"); return; }
     if (!readable(MELEE_INFO, RULE_BYTES) || !readable(STAGE_HIST, STAGE_HIST_BYTES) || !readable(STAGE_SEED, 4)) {
@@ -1774,7 +1797,8 @@ static void net_hello_wait(void) {
     if (hs_agreed) return;
     fprintf(stderr, "[rb] handshake: the match is being set up but the seed is not agreed: waiting for the other games (up to 10 min)\n");
     double t0 = now_ms();
-    while (!hs_agreed && now_ms() - t0 < 600000) { net_hello(1); Sleep(16); }
+    while (!hs_agreed && now_ms() - t0 < 600000) { net_hello(1); net_wait_say(net_local == 0 ? "Waiting for players to join..." : "Waiting for the host..."); Sleep(16); }
+    net_wait_say(NULL);
     if (hs_agreed) {
         fprintf(stderr, "[rb] handshake: agreed after %.1f s of waiting\n", (now_ms() - t0) / 1000);
         for (int k = 0; k < 5; k++) { net_hello_send(); Sleep(20); }   /* (player 2's answer, again: one lost would leave player 1 waiting) */
@@ -2193,7 +2217,8 @@ HLE_WRAP(71017880c0) {
             if (!ch_have_peer[idx]) {
                 fprintf(stderr, "[rb] handshake: waiting for player %d's choice from its game\n", idx + 1);
                 double t0 = now_ms();
-                while (!ch_have_peer[idx] && now_ms() - t0 < 600000) { net_hello(1); net_choice_send(1); Sleep(16); }   /* (ours asks for theirs) */
+                while (!ch_have_peer[idx] && now_ms() - t0 < 600000) { net_hello(1); net_choice_send(1); net_wait_say("Waiting for the others to pick their fighters..."); Sleep(16); }   /* (ours asks for theirs) */
+                net_wait_say(NULL);
             }
             if (ch_have_peer[idx]) {
                 const RbnChoice *pc = &ch_peer[idx];

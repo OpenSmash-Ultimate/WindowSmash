@@ -5187,6 +5187,16 @@ static void check_device(HRESULT hr, const char *doing) {
 }
 
 void watchdog_present(void);   /* debug_watchdog.c */
+/* (rollback: what a set-up waits for, after the window's own title; "" puts the title back. A timeout: the
+ * window thread never blocks the caller) */
+void gfx_set_status(const char *text) {
+    static char base[128];
+    if (!window) return;
+    if (!base[0]) GetWindowTextA(window, base, sizeof base);
+    char t[320];
+    if (text && *text) snprintf(t, sizeof t, "%s  -  %s", base, text); else snprintf(t, sizeof t, "%s", base);
+    SendMessageTimeoutA(window, WM_SETTEXT, 0, (LPARAM)t, SMTO_ABORTIFHUNG, 200, NULL);
+}
 void hitch_present(void);      /* debug_profile.c */
 
 /* nvfix: the NVIDIA driver lost the device each time some 4000-4500 programs had been drawn

@@ -147,12 +147,15 @@ extern double rb_save_parts[4]; extern long long rb_save_count;   /* (hle_rb_sta
 void profile_start_gated(double seconds);
 static void tape_clear(void);
 static void tag_restore(const char *why);
+static void net_left_send(void);
+static void net_gone_reset(void);
 static void safe_point(Cpu *c, uintptr_t sp) {
     S.points++;
     int on = fight_on();
     if (!on) {
         if (S.in_fight) {
             summary("fight over"); S.in_fight = 0;
+            if (net_mode == 2) net_left_send();   /* (the others stop waiting for this game's pads: v0.9) */
             /* (the other players' name tags out of this PC's list now: the game saves its list as the results come,
              * and a slot put back only after them had been saved with the friend's tag in it - gc2: 3 copies) */
             tag_restore("the fight is over");
@@ -175,6 +178,7 @@ static void safe_point(Cpu *c, uintptr_t sp) {
         S.in_fight = 1; S.fights++; S.frames = 0; S.thread = GetCurrentThreadId(); S.thread_changed = 0;
         S.sp_ref = sp; S.last_t = 0;
         summary("fight start");   /* (clears the window; its numbers are all zero) */
+        if (net_mode == 2) net_gone_reset();
         S.sp_same = 0;
     } else if (S.last_t) {
         double g = t - S.last_t;
@@ -695,6 +699,15 @@ static void ring_test(Cpu *c, u64 frame) {
  * with -1) compared frame by frame say whether rolling back gave the same fight. Both players must
  * be humans at character select (port 2 too: any controller), not CPUs; hands off. */
 #include "hle_rb_net.h"
+/* (v0.9) a player gone from this fight: its game said its fight was over (LEFT), or nothing came from it for
+ * NET_GONE_MS while this game waited. Its pads past net_gone_after are none, and nobody waits for them. */
+#define NET_GONE_MS 8000.0
+static u32 net_gone_after[RBN_PLAYERS];
+static const char *net_gone_why[RBN_PLAYERS];
+static int net_gone_shown[RBN_PLAYERS];
+static double net_pads_heard_ms[RBN_PLAYERS];
+static int net_left_take(const u8 *buf, int len);
+static int net_peer_gone(u32 key);
 static int net_mode = -1, net_delay = 2, net_lag_lo = 1, net_lag_hi = 6, net_loss = 10, net_frames = 1800;
 static u32 net_key0;            /* the logic frame the fight started at */
 static double net_t0;           /* and when (ms) */
@@ -1030,6 +1043,18 @@ static u32 net_final_frame(u32 key, u64 *h) {
     }
     return 0;
 }
+/* (the first desync: every player's pads for the frames before it, as this game played them - the other PC's log has
+ * the same lines, so the two show whether the pads or the game went apart) */
+static void net_desync_pads(u32 f) {
+    for (int p = 0; p < net_n; p++) {
+        fprintf(stderr, "[rb]   pads of player %d%s, frames %u..%u:", p + 1, p == net_local ? " (this game's)" : "", f > 20 ? f - 19 : 1, f);
+        for (u32 k = f > 20 ? f - 19 : 1; k <= f; k++) {
+            RbnPad d = rbn_get(p, k, NULL);
+            fprintf(stderr, " %llx/%d,%d/%d,%d/%d,%d", (unsigned long long)d.buttons, d.lx, d.ly, d.rx, d.ry, d.lt, d.rt);
+        }
+        fprintf(stderr, "\n");
+    }
+}
 static void net_compare(u32 key) {
     u32 c = rbn_confirmed();   /* (final: see net_final_frame) */
     if (c > key) c = key;
@@ -1045,6 +1070,7 @@ static void net_compare(u32 key) {
                     fprintf(stderr, "[rb] net mode: DESYNC with player %d at logic frame %u (ours %08x, theirs %08x)%s\n", p + 1, f, (u32)net_final[i],
                             net_peer_check[p][i], net_checks <= 1 ? ": the games did not start the same match (characters, colours, stage, rules or the seed differ)" : "");
                     check_desync_show(f);
+                    if (net_desyncs == 1) net_desync_pads(f);
                 }
             }
         }
@@ -1064,6 +1090,7 @@ static void net_receive(u32 key) {
         if (net_rules_take(buf, n)) continue;
         if (net_ready_take(buf, n)) continue;
         if (net_menu_take(buf, n)) continue;
+        if (net_left_take(buf, n)) continue;
         if (net_choice_take(buf, n)) continue;
         if (!rbn_parse(buf, (size_t)n, &m) || m.player == net_local || m.player >= net_n) continue;
         if (rbl_accept(m.player) < 0) continue;
@@ -1071,6 +1098,7 @@ static void net_receive(u32 key) {
         if (net_local == 0) hs_heard_ms[p] = now_ms();   /* (Host/Join: pads count as heard: a fight's players are no quiet slots) */
         if (net_local == 0) for (int k = 1; k < net_n; k++) if (k != p) rbl_send_to(k, buf, n);   /* (the host passes it on: M7) */
         net_msgs_in++;
+        net_pads_heard_ms[p] = now_ms();
         for (int k = 0; k < m.count; k++) rbn_remote(p, m.first + (u32)k, m.pads[k]);
         u32 ack = m.ack[net_local];
         if (ack > net_acked_by[p] && net_sent_at[ack & (RBN_RING - 1)] == ack) {
@@ -1093,6 +1121,7 @@ static void net_receive(u32 key) {
                         fprintf(stderr, "[rb] net mode: DESYNC with player %d at logic frame %u (ours %08x, theirs %08x)\n", p + 1, m.check_frame, (u32)net_final[i],
                                 net_peer_check[p][i]);
                         check_desync_show(m.check_frame);
+                        if (net_desyncs == 1) net_desync_pads(m.check_frame);
                     }
                 }
                 net_peer_check[p][i] = 0;
@@ -1269,19 +1298,21 @@ static void net_step(Cpu *c, u64 frame) {
         net_receive(key);
         net_compare(key);
         net_send(key);
-        if (!rbn_can_run(key + 1)) {
+        if (!rbn_can_run(key + 1) && !net_peer_gone(key)) {
             net_waits++;
             double w0 = now_ms(), last = w0;
-            while (!rbn_can_run(key + 1) && now_ms() - w0 < 600000) {   /* (10 min: two PCs a room apart, started by one person) */
+            /* (10 min: two PCs a room apart, started by one person; but a player heard from this fight and quiet for
+             * NET_GONE_MS, or whose fight is over, is gone: its game closed, or a desync ended its fight - v0.9) */
+            while (!rbn_can_run(key + 1) && now_ms() - w0 < 600000 && !net_peer_gone(key)) {
                 Sleep(1);
                 net_receive(key);
                 if (now_ms() - last > 16) { net_send(key); last = now_ms(); }   /* (our pads and acks again: the peer may be waiting too) */
             }
             net_wait_ms += now_ms() - w0;
-            if (!rbn_can_run(key + 1)) fprintf(stderr, "[rb] net mode: no pads from the peer for 10 min (logic frame %u): going on with guesses\n", key);
+            if (!rbn_can_run(key + 1) && !net_peer_gone(key)) fprintf(stderr, "[rb] net mode: no pads from the peer for 10 min (logic frame %u): going on with guesses\n", key);
         }
         if (net_hold_sleep < 0) { const char *e = getenv("SSBU_RB_NET_HOLD"); net_hold_sleep = e && !strcmp(e, "sleep"); }
-        if (rbn_sync_wait(key + 1)) {
+        if (!net_peer_gone(key) && rbn_sync_wait(key + 1)) {
             net_sync_waits++;
             if (net_hold_sleep) Sleep(16); else InterlockedIncrement(&rb_vsync_skip);
         }
@@ -1362,6 +1393,7 @@ static int net_pad_for(u32 id, u32 key, u64 *buttons, i32 *lx, i32 *ly, i32 *rx,
     }
     if ((int)id >= (net_mode == 2 ? net_n : 2)) return 0;
     RbnPad p = net_mode == 2 ? rbn_get((int)id, key, NULL) : id == 0 ? net_pad(0, key) : rbn_get(1, key, NULL);
+    if (net_mode == 2 && id < RBN_PLAYERS && net_gone_after[id] && key > net_gone_after[id]) p = (RbnPad){0};   /* (gone: nothing held) */
     *buttons = p.buttons; *lx = p.lx; *ly = p.ly; *rx = p.rx; *ry = p.ry; *lt = p.lt; *rt = p.rt;
     net_last_pad[id] = p;
     return 1;
@@ -1908,6 +1940,61 @@ static int net_menu_take(const u8 *buf, int len) {
         if (m.buttons & ~was & 1) fprintf(stderr, "[rb] results: player %d pressed A\n", m.player + 1);
     }
     return 1;
+}
+/* (v0.9) LEFT: this game's fight is over - a few times, it is UDP; the others stop waiting for pads past its last frame */
+static void net_left_send(void) {
+    if (net_local < 0) return;
+    RbnLeft l = {net_local, ld32(LOGIC_FRAME)};
+    u8 out[RBN_LEFT_BYTES];
+    size_t k = rbn_left_build(out, sizeof out, &l);
+    for (int i = 0; k && i < 3; i++) rbl_send(out, (int)k);
+}
+static void net_gone_reset(void) {
+    memset(net_gone_after, 0, sizeof net_gone_after);
+    memset(net_pads_heard_ms, 0, sizeof net_pads_heard_ms);
+    memset(net_gone_shown, 0, sizeof net_gone_shown);
+}
+static DWORD WINAPI net_gone_box(LPVOID text) {   /* (its own thread: the game goes on behind it) */
+    MessageBoxA(NULL, (const char *)text, "Smash Bros multiplayer", MB_OK | MB_ICONWARNING | MB_TOPMOST | MB_SETFOREGROUND);
+    return 0;
+}
+static void net_gone_mark(int p, u32 after, const char *why) {
+    if (net_gone_after[p]) return;
+    net_gone_after[p] = after ? after : 1; net_gone_why[p] = why;
+    fprintf(stderr, "[rb] net mode: player %d is gone from this fight (%s) after logic frame %u; this game is at %u\n",
+            p + 1, why, net_gone_after[p], ld32(LOGIC_FRAME));
+}
+static void net_gone_show(int p) {   /* (once this game's fight runs on past the gone player's: not at a normal end) */
+    if (net_gone_shown[p]) return;
+    net_gone_shown[p] = 1;
+    fprintf(stderr, "[rb] net mode: this fight went on past player %d's end: the box shown\n", p + 1);
+    static char text[512];
+    snprintf(text, sizeof text,
+             "Lost player %d: %s.\n\nThis fight goes on without them (their character stands still). Finish it, or pause and quit.\n\n"
+             "If both games were still connected, the two games had gone out of sync. Please send both players' logs.",
+             p + 1, net_gone_why[p]);
+    HANDLE h = CreateThread(NULL, 0, net_gone_box, text, 0, NULL);
+    if (h) CloseHandle(h);
+}
+static int net_left_take(const u8 *buf, int len) {
+    RbnLeft l;
+    if (!rbn_left_parse(buf, (size_t)len, &l)) return 0;
+    if (l.player == net_local || l.player >= net_n || rbl_accept(l.player) < 0) return 1;
+    if (net_local == 0) for (int k = 1; k < net_n; k++) if (k != l.player) rbl_send_to(k, buf, len);   /* (the host passes it on) */
+    if (S.in_fight) net_gone_mark(l.player, l.frame, "their fight is over");
+    return 1;
+}
+/* any other player gone from this fight: its LEFT came, or it was heard this fight and has been quiet NET_GONE_MS */
+static int net_peer_gone(u32 key) {
+    int gone = 0;
+    double now = now_ms();
+    for (int p = 0; p < net_n && p < RBN_PLAYERS; p++) {
+        if (p == net_local) continue;
+        if (!net_gone_after[p] && net_pads_heard_ms[p] > 0 && now - net_pads_heard_ms[p] > NET_GONE_MS)
+            net_gone_mark(p, rbn_remote_newest(p), "nothing came from their game for 8 seconds");
+        if (net_gone_after[p]) { gone = 1; if (key > net_gone_after[p] + 30) net_gone_show(p); }   /* (half a second on) */
+    }
+    return gone;
 }
 /* (hj5: the logic frame stood a second in the middle of the results animation - the mirroring ended before anyone
  * readied, and neither PC got through. The game says itself whether it shows the results:

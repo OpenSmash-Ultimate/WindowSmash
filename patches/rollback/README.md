@@ -102,6 +102,8 @@ simulation reads). One frame back plus catching up costs about 2–3 ms; seven b
 **Desync detection:** both games hash the fight state every 10 frames and compare. A frame's hash is only
 final when that frame's own inputs were all real (not guessed); before that rule, KO launches showed
 false desyncs.
+On the first desync each game also logs every player's last 20 frames of inputs, so the two logs show
+whether the inputs or the game state went apart.
 
 **Audio** (`ipc_audio.c`): a save records the audio write position; a load drops audio not yet played and
 skips audio already heard, so re-runs don't repeat sounds. Audio stays on during fights. There is some
@@ -115,7 +117,10 @@ doubled sound right at the start of a match that settles by itself.
   players only send out, so only the host needs an open port.
 - **Messages** (wire version 9): `PADS` (inputs, run-length encoded, with per-player acks), `HELLO`
   (join and the round trip), `CHOICE` (each player's fighter), `RULES` (the host's ruleset, chunked),
-  `READY` and `MENU` (results-screen presses).
+  `READY`, `MENU` (results-screen presses) and `LEFT` (a game's fight is over).
+- **A player gone from a fight**: when a player's `LEFT` comes, or nothing has come from its game for 8 s, the
+  others stop waiting for its inputs, and its character stands still. If this game's fight runs on past the
+  other's (a desync, or a closed game), a message box says so. Before this, a game waited up to 10 minutes.
 - **Input delay** is chosen from the measured round trip (e.g. delay 2 at about 70 ms).
 - **Frame-advantage sync**: a game that runs ahead of the others holds for part of a refresh (a dropped
   vsync), decided every 8 frames from each player's samples, so no one drifts into constant rollbacks.

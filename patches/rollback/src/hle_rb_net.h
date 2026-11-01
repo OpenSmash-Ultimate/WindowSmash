@@ -122,6 +122,14 @@ enum { RBN_MSG_MENU = 6 };
 typedef struct RbnMenu { int player, buttons; } RbnMenu;
 size_t rbn_menu_build(uint8_t *buf, size_t cap, const RbnMenu *m);
 int rbn_menu_parse(const uint8_t *buf, size_t len, RbnMenu *m);
+/* LEFT (v0.9): a game's fight is over (or it gave up on it): its last logic frame, so the others stop waiting for pads
+ * past it - a desync had one PC's fight end while the other's went on, waiting 10 min for pads that never came.
+ * type 7 | player u8 | 0 u8 x2 | frame u32. (Older games drop it: no PADS.) */
+enum { RBN_MSG_LEFT = 7 };
+#define RBN_LEFT_BYTES 8
+typedef struct RbnLeft { int player; uint32_t frame; } RbnLeft;
+size_t rbn_left_build(uint8_t *buf, size_t cap, const RbnLeft *l);
+int rbn_left_parse(const uint8_t *buf, size_t len, RbnLeft *l);
 int rbn_ready_parse(const uint8_t *buf, size_t len, RbnReady *r);
 int rbn_rules_parse(const uint8_t *buf, size_t len, RbnRules *r);
 int rbn_choice_parse(const uint8_t *buf, size_t len, RbnChoice *c);

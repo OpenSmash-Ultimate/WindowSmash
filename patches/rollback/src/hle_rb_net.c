@@ -253,6 +253,17 @@ int rbn_menu_parse(const uint8_t *b, size_t len, RbnMenu *m) {
     return 1;
 }
 
+size_t rbn_left_build(uint8_t *b, size_t cap, const RbnLeft *l) {
+    if (cap < RBN_LEFT_BYTES || l->player < 0 || l->player >= RBN_PLAYERS) return 0;
+    b[0] = RBN_MSG_LEFT; b[1] = (uint8_t)l->player; b[2] = b[3] = 0; put32(b + 4, l->frame);
+    return RBN_LEFT_BYTES;
+}
+int rbn_left_parse(const uint8_t *b, size_t len, RbnLeft *l) {
+    if (len != RBN_LEFT_BYTES || b[0] != RBN_MSG_LEFT || b[1] >= RBN_PLAYERS) return 0;
+    l->player = b[1]; l->frame = get32(b + 4);
+    return 1;
+}
+
 /* ---- frame advantage ---- */
 static void sync_clear(void) { memset(ndiff, 0, sizeof ndiff); memset(next_diff, 0, sizeof next_diff); }
 void rbn_sync_reset(void) { sync_clear(); owed = 0; }

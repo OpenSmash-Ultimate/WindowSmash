@@ -19,6 +19,12 @@ SRC_DIR = os.path.join(RB_ROOT, "runtime")
 MAIN, MAIN_RB = os.path.join(ROOT, "build", "main"), os.path.join(ROOT, "build", "main_rb")
 
 
+def same_text(a, b):
+    """The same file, line endings aside (a download may have either)."""
+    with open(a, "rb") as f, open(b, "rb") as g:
+        return f.read().replace(b"\r\n", b"\n") == g.read().replace(b"\r\n", b"\n")
+
+
 def assemble():
     if os.path.isdir(SRC_DIR):
         shutil.rmtree(SRC_DIR)
@@ -35,8 +41,10 @@ def assemble():
     # 2. this build's own files; a changed runtime file must still match the original it was made from
     base, src = os.path.join(HERE, "base"), os.path.join(HERE, "src")
     for n in sorted(os.listdir(src)):
+        # (a runtime file already the same as the patch's - a folder copied from the host's PC - is fine too)
         if os.path.exists(os.path.join(base, n)) and \
-                not filecmp.cmp(os.path.join(RUNTIME, n), os.path.join(base, n), shallow=False):
+                not same_text(os.path.join(RUNTIME, n), os.path.join(base, n)) and \
+                not same_text(os.path.join(RUNTIME, n), os.path.join(src, n)):
             sys.exit(f"[rb build] runtime\\{n} changed since the rollback patch was made (base\\{n}): re-make the patch")
         shutil.copy2(os.path.join(src, n), os.path.join(SRC_DIR, n))
         print(f"[rb build] {'changed' if os.path.exists(os.path.join(base, n)) else 'added'}: {n}")

@@ -3,8 +3,9 @@
 # rollback files (source only: no game code is ever downloaded) and builds build\ssbu_rollback.exe from this PC's
 # own game files; then opens the Host / Join window (rollback_netplay.ps1). Offline, or GitHub not answering:
 # straight to the window with the version already built.
-#   -Install   (the installer) always update and build, then make the MULTIPLAYER shortcut
-param([switch]$Install)
+#   -Install   (the installer) always update and build, then make the MULTIPLAYER shortcuts
+#   -Shortcuts (after an update: the new version of this script) only set the shortcuts right
+param([switch]$Install, [switch]$Shortcuts)
 
 $OWNER = "Piaka11"; $REPO = "WindowSmash"
 $ErrorActionPreference = "Stop"
@@ -48,6 +49,7 @@ $have = if (Test-Path $stamp) { (Get-Content $stamp -TotalCount 1).Trim() } else
 $latest = $null
 # (the latest release: what has been tested; pushes to the branch alone change nobody's game)
 try {
+    if ($Shortcuts) { throw "only the shortcuts" }   # (straight after an update: nothing to ask GitHub)
     $tag = (Invoke-RestMethod "$api/releases/latest" -TimeoutSec 8 -Headers @{ "User-Agent" = "SmashBrosMultiplayer" }).tag_name
     $latest = (Invoke-RestMethod "$api/commits/$tag" -TimeoutSec 8 -Headers @{ "User-Agent" = "SmashBrosMultiplayer" }).sha
 }
@@ -110,24 +112,42 @@ if ($latest -and ($latest -ne $have -or -not (Test-Path $exe))) {
             } else { Say "Multiplayer couldn't be built.`n$hint" "Warning"; exit 1 }
         } else {
             Set-Content $stamp $latest -Encoding ascii
+            & powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File $PSCommandPath -Shortcuts   # (the version just downloaded)
         }
     }
 }
 Close-Wait
 
-if ($Install) {
-    # ---- the MULTIPLAYER shortcut (this script, no command prompt) ---------------------------------------------
-    $s = (New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path $root "MULTIPLAYER.lnk"))
-    $s.TargetPath = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
-    $s.Arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""$PSCommandPath"""
-    $s.WorkingDirectory = $root
-    $s.WindowStyle = 7
-    $ico = Join-Path $root "docs\assets\windowsmash.ico"
-    if (Test-Path $ico) { $s.IconLocation = "$ico,0" }
-    $s.Description = "Play Smash online with friends (Host or Join)"
-    $s.Save()
-    exit 0
+# ---- the MULTIPLAYER shortcuts, set right on every start: in this folder, and on the desktop if wanted -----------
+# (a moved or renamed folder, or an older install's shortcut pointing elsewhere, is fixed here. The desktop one is
+# asked once, Yes or No; patches\rollback\DESKTOP_SHORTCUT_MADE.txt keeps the answer, and a deleted one stays deleted)
+function Set-Shortcut([string]$path) {
+    try {
+        $ps = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+        $want = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""$PSCommandPath"""
+        $s = (New-Object -ComObject WScript.Shell).CreateShortcut($path)
+        if ((Test-Path -LiteralPath $path) -and $s.TargetPath -eq $ps -and $s.Arguments -eq $want -and $s.WorkingDirectory -eq $root) { return }
+        $s.TargetPath = $ps; $s.Arguments = $want; $s.WorkingDirectory = $root; $s.WindowStyle = 7
+        $ico = Join-Path $root "docs\assets\windowsmash.ico"
+        if (Test-Path $ico) { $s.IconLocation = "$ico,0" }
+        $s.Description = "Play Smash online with friends (Host or Join)"
+        $s.Save()
+    } catch {}
 }
+function Set-Shortcuts {
+    Set-Shortcut (Join-Path $root "MULTIPLAYER.lnk")
+    $desk = [Environment]::GetFolderPath("Desktop")
+    if (-not $desk) { return }
+    $onDesk = Join-Path $desk "SMASH BROS MULTIPLAYER.lnk"
+    $note = Join-Path $root "patches\rollback\DESKTOP_SHORTCUT_MADE.txt"
+    if (Test-Path -LiteralPath $onDesk) { Set-Shortcut $onDesk; return }   # (there: kept pointing here)
+    if (Test-Path $note) { return }   # (asked before: the answer stands)
+    $yes = (Ask "Put a SMASH BROS MULTIPLAYER shortcut on your desktop too?`n`n(The MULTIPLAYER shortcut in your game folder is always there.)") -eq "Yes"
+    if ($yes) { Set-Shortcut $onDesk }
+    try { Set-Content $note $(if ($yes) { "Desktop shortcut: yes (deleting it keeps it deleted)." } else { "Desktop shortcut: no." }) -Encoding ascii } catch {}
+}
+Set-Shortcuts
+if ($Install -or $Shortcuts) { exit 0 }
 
 if (-not (Test-Path $exe)) { Say "Multiplayer isn't built yet. Run ""Install or Update Smash Bros.bat"" again." "Warning"; exit 1 }
 & powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File (Join-Path $PSScriptRoot "rollback_netplay.ps1")

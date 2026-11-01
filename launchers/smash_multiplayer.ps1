@@ -51,7 +51,14 @@ try {
     $tag = (Invoke-RestMethod "$api/releases/latest" -TimeoutSec 8 -Headers @{ "User-Agent" = "SmashBrosMultiplayer" }).tag_name
     $latest = (Invoke-RestMethod "$api/commits/$tag" -TimeoutSec 8 -Headers @{ "User-Agent" = "SmashBrosMultiplayer" }).sha
 }
-catch { if ($Install) { Say "GitHub couldn't be reached, so multiplayer couldn't be downloaded.`n`nCheck the internet connection and try again." "Warning"; exit 1 } }
+catch {
+    # (installing with no release found: the branch itself; an update waits for a release)
+    $err = $_.Exception.Message
+    if ($Install) {
+        try { $latest = (Invoke-RestMethod "$api/commits/friends" -TimeoutSec 8 -Headers @{ "User-Agent" = "SmashBrosMultiplayer" }).sha }
+        catch { Say "Multiplayer couldn't be downloaded from GitHub ($err; $($_.Exception.Message)).`n`nCheck the internet connection and try again." "Warning"; exit 1 }
+    }
+}
 
 if ($latest -and ($latest -ne $have -or -not (Test-Path $exe))) {
     $first = -not (Test-Path $exe)

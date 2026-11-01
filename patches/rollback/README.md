@@ -138,6 +138,10 @@ Every game must start the fight from the same state:
   free slot of their own tag list (0xF7D8-byte slots; the game keeps two copies in memory, found by searching) for
   the match, point that player's panel at it (panel + 0x214 = slot + 1), and put the slot back once the results
   are over. They go back when the fight ends: the game saves its tag list as the results come.
+- **Only a match's set-up arms net mode**: the controls screen builds player records too (and runs a test fight
+  whose flag stays set afterwards), so the handshake, rules, tags and the fight itself start only for a record built
+  from the match set-up (0x710178f3b8); other screens play locally. A tag slot is told by its control layout
+  (blank memory has none); a panel pointing at a slot without a named tag plays with no tag on every PC.
 - **Controllers (version 12)**: a GameCube controller plays as one on every PC (`style = auto` in
   `controllers_rollback_p1.ini`; `CHOICE` says so), so its analog triggers (light shield) and the GameCube controls
   agree everywhere; every other pad plays as a Pro Controller. The rollback `hle_hid.c` also writes a GameCube

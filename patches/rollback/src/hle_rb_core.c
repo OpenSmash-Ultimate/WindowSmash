@@ -59,7 +59,17 @@ __attribute__((constructor)) static void rb_init(void) {
 /* lib::Singleton<app::FighterManager>::instance_ -> FighterManager -> its impl; +0xd2 is set while a fight
  * runs (ready-go to game set), as ssbu-recomp's run-ahead reads it (ra_fight_on). */
 static int net_mode;   /* (the net mode: defined with its state below) */
-static int fight_on(void) {
+/* (net mode) a match is set up for the players: armed by player 1's record built from the match set-up (0x710178f3b8),
+ * not by the other screens that build records too - the controls screen (0x7103302aa0) with its test fight, which
+ * waited for players and stayed black (10-31). A fight that starts unarmed is played here alone, as offline. */
+static int net_armed;
+#define MATCH_SETUP_CALLER 0x710178f3b8ull
+/* (the controls screen's test fight sets the fighter manager's + 0xd2 and leaving it doesn't clear it: character select
+ * then read as a fight, the pads keyed by a logic frame standing still - the controls dead, both games stuck. In net
+ * mode an unarmed screen is never a fight, and a flag left over when a match is armed counts only once the game has
+ * cleared it (as it loads the match) and set it again at GO!) */
+static int net_leftover;
+static int fight_flag(void) {
     static u64 inst = 1;
     if (inst == 1) {
         inst = rt_symbol("_ZN3lib9SingletonIN3app14FighterManagerEE9instance_E");
@@ -68,6 +78,14 @@ static int fight_on(void) {
     if (!inst) return 0;
     u64 mgr = ld64(inst), impl = mgr ? ld64(mgr) : 0;
     return impl && ld8(impl + 0xd2);
+}
+static int fight_on(void) {
+    int on = fight_flag();
+    if (net_mode == 2) {
+        if (!net_armed) return 0;
+        if (net_leftover) { if (!on) net_leftover = 0; return 0; }
+    }
+    return on;
 }
 
 static struct {
@@ -1324,6 +1342,7 @@ static void net_step(Cpu *c, u64 frame) {
 /* (rb_pad, in loop mode: both players' pads by logic frame) */
 static int net_pad_for(u32 id, u32 key, u64 *buttons, i32 *lx, i32 *ly, i32 *rx, i32 *ry, i32 *lt, i32 *rt) {
     if (net_mode != 1 && net_mode != 2) return 0;
+    if (net_mode == 2 && !net_armed) return 0;   /* (the controls screen's test fight: this PC's own pads) */
     if (!net_got) {   /* a fight's reads before its first safe point: they were live; now the bots' too (both from net_pad) */
         static int shown;
         if (shown < 16 && id < 2) {
@@ -1511,8 +1530,20 @@ static u32 tag_given[RBN_PLAYERS];         /* (each player's panel + 0x214 this 
 static int tag_slot_ok(u64 a) {
     if (!readable(a, RBN_TAG_BYTES)) return 0;
     u32 used = ld32(a), hash = ld32(a + 4), len = ld32(a + 8);
-    if (used == 0) return hash == TAG_EMPTY_HASH && len == 0;
-    if (used != 1 || len < 1 || len > 10) return 0;
+    /* (every slot, used or not, holds a control layout at + 0x24 - the default one when empty: blank memory doesn't) */
+    int controls = 0;
+    for (u32 k = 0x24; k < 0x34; k++) controls |= ld8(a + k);
+    if (!controls) return 0;
+    /* (the rest lenient: a deleted tag's slot looked otherwise in one game's memory than in the save, so that game found
+     * its list two slots late - gc4, gc6, desyncs; the control layout keeps blank memory out, gc5) */
+    (void)hash;
+    return used <= 1 && len <= 10;
+}
+/* A slot that holds a real tag: used, named. */
+static int tag_slot_named(u64 a) {
+    if (!tag_slot_ok(a) || ld32(a) != 1) return 0;
+    u32 len = ld32(a + 8);
+    if (len < 1) return 0;
     for (u32 k = 0; k < len; k++) if (!ld8(a + 12 + 2 * k)) return 0;
     return 1;
 }
@@ -1540,7 +1571,7 @@ static void tag_find(void) {
                 while (s >= TAG_STRIDE && tag_slot_ok(s - TAG_STRIDE)) s -= TAG_STRIDE;
                 int n = 0;
                 while (n < TAG_MAX_SLOTS && tag_slot_ok(s + TAG_STRIDE * (u64)n)) n++;
-                if (n < 8 || (tag_lists && s == tag_list[0])) { q = (const u8 *)G2H(s + TAG_STRIDE * (u64)n) - 1; if (q < lo + 4 || q >= he) break; continue; }
+                if (n < 40 || (tag_lists && s == tag_list[0])) { q = (const u8 *)G2H(s + TAG_STRIDE * (u64)n) - 1; if (q < lo + 4 || q >= he) break; continue; }
                 tag_list[tag_lists++] = s;
                 if (!tag_slots || n < tag_slots) tag_slots = n;
                 q = (const u8 *)G2H(s + TAG_STRIDE * (u64)n) - 1;
@@ -1550,6 +1581,11 @@ static void tag_find(void) {
         }
     fprintf(stderr, "[rb] name tags: %d copies of the list found (%#llx, %#llx), %d slots, in %.0f ms\n", tag_lists,
             (unsigned long long)tag_list[0], (unsigned long long)tag_list[1], tag_slots, now_ms() - t0);
+    for (int k = 0; k < 3 && tag_lists > 0; k++) {   /* (the first slots' heads: if a slot ever looks odd again) */
+        u64 s = tag_list[0] + TAG_STRIDE * (u64)k;
+        fprintf(stderr, "[rb] name tags: slot %d: used %u, hash %08x, length %u, controls %02x %02x %02x %02x\n", k, ld32(s), ld32(s + 4), ld32(s + 8),
+                ld8(s + 0x24), ld8(s + 0x25), ld8(s + 0x26), ld8(s + 0x27));
+    }
     if (!tag_lists) tag_lists = -1;   /* (not again this run) */
 }
 static void tag_name(const u8 *head, char *out, int cap) {   /* (for the log: the name in ASCII, ? for the rest) */
@@ -1563,8 +1599,9 @@ static void tag_mine(u64 st) {
     ch_mine.has_tag = 0; tag_mine_slot = 0;
     if (!n || n == 0xffffffffu) return;
     tag_find();
-    if (tag_lists <= 0 || n > (u32)tag_slots || !tag_slot_ok(tag_list[0] + TAG_STRIDE * (n - 1))) {
-        fprintf(stderr, "[rb] name tags: this game's player has tag %u, but it isn't in the list here: played without it\n", n);
+    if (tag_lists <= 0 || n > (u32)tag_slots || !tag_slot_named(tag_list[0] + TAG_STRIDE * (n - 1))) {
+        /* (a deleted tag's slot, say: no tag on every PC, this one too - the default controls everywhere) */
+        fprintf(stderr, "[rb] name tags: this game's player has tag %u, but it isn't a named tag in the list here: played without one, here too\n", n);
         st32(st + 0x214, 0);
         return;
     }
@@ -2021,7 +2058,7 @@ static void savestates(Cpu *c, u64 frame) {
                     net_delay, net_lag_lo, net_lag_hi, net_loss, net_frames);
         }
     }
-    if (net_mode && S.in_fight) { net_step(c, frame); return; }
+    if (net_mode && S.in_fight && (net_mode != 2 || net_armed)) { net_step(c, frame); return; }
     /* (net mode: a fight that ended before <frames> still gets its report, and the whole fight is checked:
      * the launcher's 7200 is a floor, not a window - twopc8's report never came, its fight ending sooner) */
     if (net_mode == 2 && !S.in_fight && net_got && !net_done) {
@@ -2062,7 +2099,7 @@ static void savestates(Cpu *c, u64 frame) {
                         settled, timed_out, settle_ms, nbusy ? ": a thread stayed busy" : "");
     }
     if (net_mode == 2 && !S.in_fight && net_countdown) net_pre_fight(c, frame);   /* (the GO! freeze) */
-    if (net_mode == 2 && !S.in_fight && !net_countdown && net_got) net_results_frame(c);   /* (the results screen) */
+    if (net_mode == 2 && net_armed && !S.in_fight && !net_countdown && net_got) net_results_frame(c);   /* (the results screen; not after the controls screen's test fight: no match was set up) */
     if (ring_from >= 0 && S.in_fight && S.frames >= ring_from) { ring_test(c, frame); return; }
     /* SSBU_RB_BENCH=<frame>,<count> (M3): a save at every fight frame from <frame>, <count> of them,
      * as rollback's per-frame capture would do; before a replay check's save, that save is a
@@ -2327,7 +2364,21 @@ HLE_WRAP(71022756c0) { RAND_WRAP(71022756c0, "randf"); }
 HLE_WRAP(71017880c0) {
     int idx = (int)c->x[1];
     u64 st = c->x[0];
-    if (net_mode == 2 && idx == 0) {
+    if (idx == 0) {   /* (research, 10-31: the controls screen builds records too; who calls, to tell a match's set-up apart) */
+        char chain[160]; int k = snprintf(chain, sizeof chain, "%#llx", (unsigned long long)c->x[30]);
+        u64 fp = c->x[29];
+        for (int d = 0; d < 5 && fp && readable(fp, 16) && k < (int)sizeof chain - 20; d++) {
+            k += snprintf(chain + k, sizeof chain - k, " %#llx", (unsigned long long)ld64(fp + 8));
+            fp = ld64(fp);
+        }
+        fprintf(stderr, "[rb] record build: player 1's, called from %s\n", chain);
+        if (net_mode == 2) {
+            net_armed = c->x[30] == MATCH_SETUP_CALLER;
+            if (net_armed && fight_flag()) { net_leftover = 1; fprintf(stderr, "[rb] net mode: the controls screen's fight flag is still set: the fight starts once the game sets it anew\n"); }
+            if (!net_armed) fprintf(stderr, "[rb] net mode: not a match's set-up (another screen builds records: controls?): no wait, played here alone\n");
+        }
+    }
+    if (net_mode == 2 && idx == 0 && net_armed) {
         fprintf(stderr, "[rb] net mode: player 1's record is built (a match set-up): the %d players hold nothing until the fight\n", net_n);
         tag_restore("a new set-up");
         memset(tag_given, 0, sizeof tag_given);
@@ -2339,7 +2390,7 @@ HLE_WRAP(71017880c0) {
         if (net_results) { InterlockedExchange(&net_results, 0); fprintf(stderr, "[rb] results: a new match set up: A and B no longer passed\n"); }
     }
     if (net_mode == 2 && idx == 0) net_panel0 = st;   /* (the results' research: character select's panel, watched after the fight) */
-    if (net_mode == 2 && idx >= 0 && idx < net_n && readable(st, 0x460)) {
+    if (net_mode == 2 && net_armed && idx >= 0 && idx < net_n && readable(st, 0x460)) {
         /* (the panel state, read off the PR's runs: + 0x78 type (0 human), + 0x88 ui_chara, + 0x90 colour,
          * + 0x210 the controller slot, + 0x450 "human with a name tag") */
         u32 cur = ld32(SEL_CUR);

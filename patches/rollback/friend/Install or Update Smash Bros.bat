@@ -1,6 +1,6 @@
 @echo off
 rem SMASH BROS multiplayer (rollback netplay for WindowSmash): the one file friends download and click. It finds their
-rem WindowSmash folder (built with their own game files), names it "SMASH BROS", downloads the multiplayer launcher
+rem WindowSmash folder (built with their own game files), downloads the multiplayer launcher
 rem from GitHub and runs it once: that downloads the rollback source, builds build\ssbu_rollback.exe from their own
 rem game files and makes the MULTIPLAYER shortcut. After that MULTIPLAYER updates itself. Nothing built from game
 rem files is ever downloaded or shared. The PowerShell part is below the marker line.
@@ -10,9 +10,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "iex ((Get-Content -Liter
 if errorlevel 1 pause
 exit /b
 ##POWERSHELL##
-$OWNER = "Piaka11"; $REPO = "WindowSmash"; $BRANCH = "friends"
+$OWNER = "Piaka11"; $REPO = "WindowSmash"; $BRANCH = "rollback-netplay-preview"
 $ErrorActionPreference = "Stop"
-$NAME = "SMASH BROS"
 $memDir = Join-Path $env:LOCALAPPDATA "SMASH BROS Multiplayer"
 $memFile = Join-Path $memDir "folder.txt"
 $logFile = Join-Path $memDir "install.log"
@@ -78,8 +77,8 @@ if (-not $ws -and -not (Test-Path -LiteralPath $memFile)) {
                 (Join-Path $env:USERPROFILE "Downloads"), $env:USERPROFILE) + (Get-PSDrive -PSProvider FileSystem | ForEach-Object { $_.Root })
     foreach ($pl in $places) {
         if (-not $pl -or -not (Test-Path -LiteralPath $pl)) { continue }
-        $c = Join-Path $pl $NAME
-        if (Has-Game $c) { if ((Ask "Found your game here:`n`n$c`n`nInstall multiplayer into this folder?") -eq "Yes") { $ws = $c }; break }
+        foreach ($g in @(Find-Game $pl)) { if ((Ask "Found your game here:`n`n$g`n`nInstall multiplayer into this folder?") -eq "Yes") { $ws = $g; break } }
+        if ($ws) { break }
     }
 }
 if (-not $ws) { $ws = Pick-Folder }
@@ -88,26 +87,6 @@ Write-Host "folder: $ws"
 if (-not (Test-Path -LiteralPath (Join-Path $ws "build\main"))) { Fail "WindowSmash isn't built in $ws yet.`n`nRun ""Install WindowSmash.bat"" there first (it builds the game), then run this again." }
 if (Get-Process -Name ssbu_rollback, ssbu -ErrorAction SilentlyContinue) { Fail "The game is running: close it, then run this again." }
 
-# ---- the folder's name: SMASH BROS (the same on every PC) -------------------------------------------------------
-if ((Split-Path -Leaf $ws) -ne $NAME) {
-    $to = Join-Path (Split-Path -Parent $ws) $NAME
-    if (Test-Path -LiteralPath $to) {
-        Say "There's already a folder named ""$NAME"" next to your WindowSmash folder, so the name stays ""$(Split-Path -Leaf $ws)""." "Warning"
-    } else {
-        while ($true) {
-            try { Rename-Item -LiteralPath $ws -NewName $NAME; $ws = $to; break }
-            catch { if ((Ask "The folder couldn't be renamed to ""$NAME"" (something has it open: close any window or program using it).`n`nRetry, or Cancel to keep its name." "RetryCancel") -ne "Retry") { break } }
-        }
-    }
-}
-# (the game files' locations are full paths in dump\modules\romfs*.cfg: point them at the folder as it is named now)
-foreach ($cfg in "dump\modules\romfs.cfg", "dump\modules\romfs_base.cfg") {
-    $f = Join-Path $ws $cfg
-    if (Test-Path -LiteralPath $f) {
-        $t = Get-Content -LiteralPath $f | ForEach-Object { $i = $_.IndexOf('\dump\modules\'); if ($i -ge 0) { $ws + $_.Substring($i) } else { $_ } }
-        Set-Content -LiteralPath $f -Encoding ascii -Value $t
-    }
-}
 Set-Content -LiteralPath $memFile -Encoding utf8 -Value $ws
 
 # ---- the multiplayer launcher from GitHub; it downloads and builds the rest --------------------------------------

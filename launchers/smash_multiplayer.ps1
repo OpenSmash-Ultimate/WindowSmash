@@ -1,4 +1,4 @@
-# What the MULTIPLAYER shortcut runs (SMASH BROS\MULTIPLAYER.lnk, made by "Install or Update Smash Bros.bat"):
+# What the MULTIPLAYER shortcut runs (MULTIPLAYER.lnk in the WindowSmash folder, made by "Install or Update Smash Bros.bat"):
 # asks GitHub whether the fork's latest release is a newer version than the one built here; if so, downloads its
 # rollback files (source only: no game code is ever downloaded) and builds build\ssbu_rollback.exe from this PC's
 # own game files; then opens the Host / Join window (rollback_netplay.ps1). Offline, or GitHub not answering:
@@ -55,7 +55,7 @@ catch {
     # (installing with no release found: the branch itself; an update waits for a release)
     $err = $_.Exception.Message
     if ($Install) {
-        try { $latest = (Invoke-RestMethod "$api/commits/friends" -TimeoutSec 8 -Headers @{ "User-Agent" = "SmashBrosMultiplayer" }).sha }
+        try { $latest = (Invoke-RestMethod "$api/commits/rollback-netplay-preview" -TimeoutSec 8 -Headers @{ "User-Agent" = "SmashBrosMultiplayer" }).sha }
         catch { Say "Multiplayer couldn't be downloaded from GitHub ($err; $($_.Exception.Message)).`n`nCheck the internet connection and try again." "Warning"; exit 1 }
     }
 }

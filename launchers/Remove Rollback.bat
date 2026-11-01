@@ -1,6 +1,6 @@
 @echo off
 setlocal
-rem SMASH BROS\launchers\Remove Rollback.bat: takes multiplayer (rollback netplay) out of the folder it sits in: the
+rem launchers\Remove Rollback.bat: takes multiplayer (rollback netplay) out of the folder it sits in: the
 rem MULTIPLAYER shortcut, the rollback build and its build folders, its logs, its launchers (this file last). Your game
 rem files, your save, the normal game and WindowSmash's own launchers stay; so does the folder's name.
 for %%r in ("%~dp0..") do set "WS=%%~fr"

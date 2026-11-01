@@ -154,7 +154,7 @@ $timer.Add_Tick({
     $a = Read-Addresses
     if ($a) {
         $timer.Stop()
-        $addrInfo.Text = "Send your friends the address that fits, then start Smash and pick your fighter (and the stage)."
+        $addrInfo.Text = "Send your friends the address that fits, then start Smash and pick your fighter (and the stage). Keep this window open: it says when the game waits for players."
         foreach ($c in $lanLabel, $lanBox, $lanCopy) { $c.Visible = $true }
         $lanBox.Text = $a.Lan
         if ($a.Outside) { foreach ($c in $outLabel, $outBox, $outCopy) { $c.Visible = $true }; $outBox.Text = $a.Outside }
@@ -187,7 +187,7 @@ if ($Shot) {   # (checks: every page drawn to an image, the address page with sa
     $form.Show(); [Windows.Forms.Application]::DoEvents()
     foreach ($c in $lanLabel, $lanBox, $lanCopy, $outLabel, $outBox, $outCopy) { $c.Visible = $true }
     $lanBox.Text = "192.168.1.20"; $outBox.Text = "203.0.113.7"
-    $addrInfo.Text = "Send your friends the address that fits, then start Smash and pick your fighter (and the stage)."
+    $addrInfo.Text = "Send your friends the address that fits, then start Smash and pick your fighter (and the stage). Keep this window open: it says when the game waits for players."
     $i = 0
     foreach ($pg in $pages) {
         Show-Page $pg; [Windows.Forms.Application]::DoEvents()

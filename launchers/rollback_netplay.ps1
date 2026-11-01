@@ -113,7 +113,8 @@ $outBox = New-Object Windows.Forms.TextBox; $outBox.ReadOnly = $true; $outBox.Lo
 $outCopy = New-Button "Copy" 300 177 90 32
 $addrNote = New-Label "" 20 220 420 45
 $addrDone = New-Button "Close" 340 270 100 40
-$addrPage.Controls.AddRange(@($addrInfo, $lanLabel, $lanBox, $lanCopy, $outLabel, $outBox, $outCopy, $addrNote, $addrDone))
+$hostStatus = New-Label "" 20 270 310 45
+$addrPage.Controls.AddRange(@($addrInfo, $lanLabel, $lanBox, $lanCopy, $outLabel, $outBox, $outCopy, $addrNote, $hostStatus, $addrDone))
 foreach ($c in $lanLabel, $lanBox, $lanCopy, $outLabel, $outBox, $outCopy) { $c.Visible = $false }
 
 # page 4: join
@@ -128,9 +129,10 @@ $joinPage.Controls.AddRange(@($addr, $joinGo, $joinBack))
 
 # page 5: joined
 $joinedPage = New-Object Windows.Forms.Panel; $joinedPage.Dock = "Fill"
-$joinedPage.Controls.Add((New-Label "The game is starting. When it's up: Smash, then pick your fighter with your controller. The host picks the stage. You can close this window." 20 20 420 110))
+$joinedPage.Controls.Add((New-Label "The game is starting. When it's up: Smash, then pick your fighter with your controller. The host picks the stage. Keep this window open: it says when the game waits for the others." 20 20 420 110))
 $joinedDone = New-Button "Close" 340 270 100 40
-$joinedPage.Controls.Add($joinedDone)
+$joinStatus = New-Label "" 20 150 420 60
+$joinedPage.Controls.AddRange(@($joinedDone, $joinStatus))
 
 $pages = @($choose, $hostPage, $addrPage, $joinPage, $joinedPage)
 $form.Controls.AddRange($pages)
@@ -162,13 +164,22 @@ $timer.Add_Tick({
         $addrInfo.Text = "The game hasn't said its address yet: see build\rollback_address.txt in a minute."
     }
 })
+# what the game waits for at a match set-up (it draws nothing then, so it looks frozen): buildollback_status.txt
+foreach ($l in $hostStatus, $joinStatus) { $l.Font = New-Object Drawing.Font($form.Font.FontFamily, 11, [Drawing.FontStyle]::Bold); $l.ForeColor = [Drawing.Color]::DarkBlue }
+$statusFile = Join-Path $root "buildollback_status.txt"
+$statusTimer = New-Object Windows.Forms.Timer; $statusTimer.Interval = 500
+$statusTimer.Add_Tick({
+    $t = ""; try { if (Test-Path $statusFile) { $t = ([IO.File]::ReadAllText($statusFile)).Trim() } } catch {}
+    $hostStatus.Text = $t; $joinStatus.Text = $t
+})
+function Start-Status { try { Remove-Item $statusFile -ErrorAction SilentlyContinue } catch {}; $statusTimer.Start() }
 $hostGo.Add_Click({
-    try { Start-Rollback "host" $count.SelectedItem | Out-Null; Show-Page $addrPage; $timer.Start() } catch { Fail $_.Exception.Message }
+    try { Start-Status; Start-Rollback "host" $count.SelectedItem | Out-Null; Show-Page $addrPage; $timer.Start() } catch { Fail $_.Exception.Message }
 })
 $joinGo.Add_Click({
     $a = $addr.Text.Trim()
     if (-not $a) { Fail "Type the host's address first."; return }
-    try { Set-Content -Encoding ascii $lastFile $a; Start-Rollback "join" $a | Out-Null; Show-Page $joinedPage } catch { Fail $_.Exception.Message }
+    try { Set-Content -Encoding ascii $lastFile $a; Start-Status; Start-Rollback "join" $a | Out-Null; Show-Page $joinedPage } catch { Fail $_.Exception.Message }
 })
 $addr.Add_KeyDown({ if ($_.KeyCode -eq "Enter") { $joinGo.PerformClick() } })
 

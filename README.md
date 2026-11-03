@@ -1,3 +1,6 @@
+> [!IMPORTANT]
+> **This project has moved.** WindowSmash and ssbu-recomp are now one project, **[OpenSmash-Ultimate](https://github.com/OpenSmash-Ultimate/OpenSmash-Ultimate)**: new versions, issues and pull requests go there. Join the merged Discord: **[discord.gg/pkgyYGf3YB](https://discord.gg/pkgyYGf3YB)**. This repository is kept for its history.
+
 <p align="center">
   <img src="docs/assets/windowsmash-banner.svg" alt="WindowSmash" width="100%">
 </p>
